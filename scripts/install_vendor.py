@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-"""Install project dependencies into the bundled vendor directory."""
-#!/usr/bin/env python3
 """Install project dependencies into a bundled vendor directory."""
 
 from __future__ import annotations
