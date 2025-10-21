@@ -163,3 +163,53 @@ def test_risk_engine_snapshot_and_restore_preserves_state():
     restored_state = restored.snapshot()
     assert restored_state["positions"][0]["figi"] == "FIGI"
     assert restored_state["realized_pnl"] == snapshot["realized_pnl"]
+
+
+def test_risk_engine_calculates_and_validates_order():
+    limits = RiskLimits(
+        max_position=50,
+        max_gross_exposure=100_000,
+        capital_base=200_000,
+        max_risk_per_instrument=0.05,
+    )
+    engine = RiskEngine(limits)
+    signal = MLSignal(figi="FIGI", direction=1, confidence=0.9)
+    size = engine.calculate_position_size(signal, price=100, spread=0.05, atr=0.2)
+    assert size > 0
+    assert engine.validate_order("FIGI", size, 100)
+
+
+def test_risk_engine_manage_positions_trailing_and_closure():
+    limits = RiskLimits(max_position=10, capital_base=10_000, max_risk_per_instrument=0.05)
+    engine = RiskEngine(limits)
+    engine.update_position("FIGI", 3, price=100, stop_loss=90)
+    snapshots = {"FIGI": {"price": 120.0, "spread": 0.1, "atr": 0.5}}
+    adjustments = engine.manage_positions(snapshots)
+    assert any(adj.action == "tighten_stop" for adj in adjustments)
+    updated_stop = engine.snapshot()["positions"][0]["stop_loss"]
+    assert updated_stop > 90
+    trigger_snapshots = {"FIGI": {"price": updated_stop - 0.1, "spread": 0.1, "atr": 0.5}}
+    closing = engine.manage_positions(trigger_snapshots)
+    assert any(adj.action == "close" for adj in closing)
+    assert engine.trading_halted() is True
+
+
+def test_risk_engine_liquidity_forecast_and_hedge():
+    limits = RiskLimits(
+        max_position=100,
+        capital_base=100_000,
+        max_risk_per_instrument=0.05,
+        max_gross_exposure=150_000,
+    )
+    engine = RiskEngine(limits)
+    engine.update_position("FIGI1", 50, price=100)
+    engine.update_position("FIGI2", -10, price=50)
+    snapshots = {
+        "FIGI1": {"price": 100.0, "spread": 0.2, "atr": 0.4},
+        "FIGI2": {"price": 50.0, "spread": 0.1, "atr": 0.3},
+    }
+    liquidity = engine.forecast_liquidity(snapshots)
+    assert 0.0 <= liquidity <= 1.0
+    adjustments = engine.hedge_portfolio({figi: data["price"] for figi, data in snapshots.items()})
+    assert adjustments
+    assert any(adj.action in {"hedge", "reduce"} for adj in adjustments)

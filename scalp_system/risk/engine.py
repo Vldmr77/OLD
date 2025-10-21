@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal
 
 from ..config.base import RiskLimits
 from ..ml.engine import MLSignal
@@ -34,6 +34,14 @@ class OrderPlan:
     stop_loss: float
     aggressiveness: float
     slices: int
+
+
+@dataclass
+class PositionAdjustment:
+    figi: str
+    action: Literal["tighten_stop", "close", "reduce", "hedge"]
+    quantity: int
+    reason: str
 
 
 class RiskEngine:
@@ -85,6 +93,31 @@ class RiskEngine:
         if self._order_count + plan.slices > self._limits.max_order_rate_per_minute:
             return None
         return plan
+
+    def calculate_position_size(
+        self,
+        signal: MLSignal,
+        price: float,
+        *,
+        spread: float,
+        atr: float,
+    ) -> int:
+        position = self._positions.get(signal.figi, Position(figi=signal.figi))
+        plan = self._build_order_plan(position, signal, price, spread, atr)
+        return plan.quantity if plan else 0
+
+    def validate_order(self, figi: str, quantity: int, price: float) -> bool:
+        if quantity <= 0 or price <= 0:
+            return False
+        if abs(quantity) > self._limits.max_position:
+            return False
+        exposure = abs(quantity * price)
+        if 0 < self._limits.max_gross_exposure < exposure:
+            return False
+        pct_limit = self._limits.max_exposure_pct * self._capital_base
+        if pct_limit > 0 and exposure > pct_limit:
+            return False
+        return True
 
     def register_order(self, slices: int = 1) -> None:
         self._reset_if_new_day()
@@ -138,6 +171,11 @@ class RiskEngine:
             position.quantity = new_qty
             if stop_loss is not None:
                 position.stop_loss = stop_loss
+
+    def process_trade_result(
+        self, figi: str, filled_price: float, quantity: int, *, stop_loss: Optional[float] = None
+    ) -> None:
+        self.update_position(figi, quantity, filled_price, stop_loss=stop_loss)
 
     def metrics(self, market_prices: Dict[str, float]) -> RiskMetrics:
         unrealized = 0.0
@@ -309,6 +347,122 @@ class RiskEngine:
             "halt_trading": self._halt_trading,
         }
 
+    def manage_positions(self, snapshots: Dict[str, Dict[str, float]]) -> List[PositionAdjustment]:
+        adjustments: List[PositionAdjustment] = []
+        for figi, position in self._positions.items():
+            if position.quantity == 0:
+                continue
+            snapshot = snapshots.get(figi)
+            if not snapshot:
+                continue
+            price = float(snapshot.get("price", position.average_price or 0.0))
+            spread = max(float(snapshot.get("spread", 0.0)), 0.0)
+            atr = max(float(snapshot.get("atr", 0.0)), 0.0)
+            if price <= 0:
+                continue
+            desired_stop = price - (1.8 * atr + 0.5 * spread)
+            if position.quantity < 0:
+                desired_stop = price + (1.8 * atr + 0.5 * spread)
+            tightened = False
+            if position.quantity > 0:
+                if position.stop_loss == 0.0 or desired_stop > position.stop_loss:
+                    position.stop_loss = desired_stop
+                    tightened = True
+            else:
+                if position.stop_loss == 0.0 or desired_stop < position.stop_loss:
+                    position.stop_loss = desired_stop
+                    tightened = True
+            if tightened:
+                adjustments.append(
+                    PositionAdjustment(
+                        figi=figi,
+                        action="tighten_stop",
+                        quantity=abs(position.quantity),
+                        reason="trailing_stop",
+                    )
+                )
+            stop = position.stop_loss
+            if stop:
+                if position.quantity > 0 and price <= stop:
+                    adjustments.append(
+                        PositionAdjustment(
+                            figi=figi,
+                            action="close",
+                            quantity=abs(position.quantity),
+                            reason="stop_loss_trigger",
+                        )
+                    )
+                    self.trigger_emergency_halt("stop_loss_trigger")
+                elif position.quantity < 0 and price >= stop:
+                    adjustments.append(
+                        PositionAdjustment(
+                            figi=figi,
+                            action="close",
+                            quantity=abs(position.quantity),
+                            reason="stop_loss_trigger",
+                        )
+                    )
+                    self.trigger_emergency_halt("stop_loss_trigger")
+        return adjustments
+
+    def forecast_liquidity(self, snapshots: Dict[str, Dict[str, float]]) -> float:
+        if not snapshots:
+            return 1.0
+        scores: List[float] = []
+        for snapshot in snapshots.values():
+            price = max(float(snapshot.get("price", 0.0)), 1e-6)
+            spread = max(float(snapshot.get("spread", 0.0)), 0.0)
+            atr = max(float(snapshot.get("atr", 0.0)), 0.0)
+            penalty = min(1.0, (spread / price) + atr)
+            scores.append(max(0.0, 1.0 - penalty))
+        return sum(scores) / len(scores)
+
+    def hedge_portfolio(self, market_prices: Dict[str, float]) -> List[PositionAdjustment]:
+        adjustments: List[PositionAdjustment] = []
+        exposures: List[tuple[str, float, float, int]] = []
+        for figi, position in self._positions.items():
+            if position.quantity == 0:
+                continue
+            price = float(market_prices.get(figi, position.average_price or 0.0))
+            if price <= 0:
+                continue
+            exposure = price * position.quantity
+            exposures.append((figi, exposure, price, position.quantity))
+        if not exposures:
+            return adjustments
+        gross = sum(abs(item[1]) for item in exposures)
+        if gross <= 0:
+            return adjustments
+        net = sum(item[1] for item in exposures)
+        imbalance = abs(net) / gross
+        threshold = max(0.05, min(0.25, self._limits.max_risk_per_instrument * 2))
+        if imbalance < threshold:
+            return adjustments
+        target_figi, _, price, qty = max(exposures, key=lambda item: abs(item[1]))
+        hedge_qty = int(abs(net) / max(price, 1.0))
+        hedge_qty = min(hedge_qty, self._limits.max_position)
+        if hedge_qty > 0:
+            adjustments.append(
+                PositionAdjustment(
+                    figi=target_figi,
+                    action="hedge",
+                    quantity=hedge_qty,
+                    reason=f"exposure_imbalance_{imbalance:.3f}_{'long' if net > 0 else 'short'}",
+                )
+            )
+        exposure_limit = self._limits.max_gross_exposure
+        if exposure_limit > 0 and abs(qty) * price > exposure_limit:
+            reduce_qty = max(1, abs(qty) - int(exposure_limit / max(price, 1.0)))
+            adjustments.append(
+                PositionAdjustment(
+                    figi=target_figi,
+                    action="reduce",
+                    quantity=reduce_qty,
+                    reason="gross_exposure_limit",
+                )
+            )
+        return adjustments
+
     def calculate_order_plan(
         self, signal: MLSignal, price: float, *, spread: float, atr: float
     ) -> Optional[OrderPlan]:
@@ -398,4 +552,10 @@ class RiskEngine:
         return max(self._limits.max_daily_loss, pct_limit)
 
 
-__all__ = ["RiskEngine", "RiskMetrics", "Position", "OrderPlan"]
+__all__ = [
+    "RiskEngine",
+    "RiskMetrics",
+    "Position",
+    "OrderPlan",
+    "PositionAdjustment",
+]

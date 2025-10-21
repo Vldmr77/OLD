@@ -165,6 +165,20 @@ class RiskLimits:
 
 
 @dataclass
+class RiskScheduleConfig:
+    rotation_interval_seconds: int = 60
+    position_check_interval_seconds: int = 10
+    drift_check_interval_seconds: int = 1800
+    hedging_interval_seconds: int = 300
+
+    def ensure(self) -> None:
+        self.rotation_interval_seconds = max(0, int(self.rotation_interval_seconds))
+        self.position_check_interval_seconds = max(0, int(self.position_check_interval_seconds))
+        self.drift_check_interval_seconds = max(0, int(self.drift_check_interval_seconds))
+        self.hedging_interval_seconds = max(0, int(self.hedging_interval_seconds))
+
+
+@dataclass
 class ExecutionConfig:
     account_id: Optional[str] = None
     venue: Literal["MOEX", "SPB"] = "MOEX"
@@ -441,6 +455,7 @@ class OrchestratorConfig:
     features: FeatureConfig = field(default_factory=FeatureConfig)
     ml: MLConfig = field(default_factory=MLConfig)
     risk: RiskLimits = field(default_factory=RiskLimits)
+    risk_schedule: RiskScheduleConfig = field(default_factory=RiskScheduleConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
@@ -464,6 +479,7 @@ class OrchestratorConfig:
         self.datafeed.ensure()
         self.ml.ensure()
         self.risk.ensure()
+        self.risk_schedule.ensure()
         self.training.ensure()
         self.training_schedule.ensure()
         self.backtest.ensure()
@@ -491,6 +507,7 @@ class OrchestratorConfig:
         reporting_data = _ensure_dict(data.get("reporting", {}))
         disaster_data = _ensure_dict(data.get("disaster_recovery", {}))
         session_data = _ensure_dict(data.get("session", {}))
+        risk_schedule_data = _ensure_dict(data.get("risk_schedule", {}))
         ml_data = _ensure_dict(data.get("ml", {}))
         weights_data = _ensure_dict(ml_data.get("weights", {}))
         class_weights_data = ml_data.get("class_weights", {})
@@ -514,6 +531,7 @@ class OrchestratorConfig:
                 model_dir=_to_path(ml_data.get("model_dir", DEFAULT_MODEL_DIR)),
             ),
             risk=RiskLimits(**_ensure_dict(data.get("risk", {}))),
+            risk_schedule=RiskScheduleConfig(**risk_schedule_data),
             execution=ExecutionConfig(**_ensure_dict(data.get("execution", {}))),
             storage=StorageConfig(**_ensure_dict(data.get("storage", {}))),
             monitoring=MonitoringConfig(

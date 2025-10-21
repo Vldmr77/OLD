@@ -33,7 +33,7 @@ from .monitoring.notifications import NotificationDispatcher
 from .monitoring.reporting import PerformanceReporter
 from .monitoring.resource import ResourceMonitor
 from .network import ConnectivityFailover
-from .risk.engine import RiskEngine
+from .risk.engine import PositionAdjustment, RiskEngine
 from .security import KeyManager
 from .storage.checkpoint import CheckpointManager
 from .storage.disaster_recovery import DisasterRecoveryManager
@@ -50,6 +50,7 @@ class Orchestrator:
         self._feature_pipeline = FeaturePipeline(config.features)
         self._ml_engine = MLEngine(config.ml)
         self._risk_engine = RiskEngine(config.risk)
+        self._risk_schedule = config.risk_schedule
         self._metrics = MetricsRegistry()
         self._repository = SQLiteRepository(
             config.storage.base_path / "signals.db",
@@ -149,6 +150,7 @@ class Orchestrator:
             notifications=self._notifications,
         )
         self._training_task: Optional[asyncio.Task] = None
+        self._risk_tasks: list[asyncio.Task] = []
 
     def _resolve_api_token(self) -> Optional[str]:
         token = (
@@ -316,6 +318,119 @@ class Orchestrator:
             self.reload_models(report.model_dir)
         except Exception as exc:  # pragma: no cover - reload issues
             LOGGER.exception("Model reload after training failed: %s", exc)
+
+    def _start_risk_tasks(self) -> None:
+        if self._risk_schedule.rotation_interval_seconds > 0:
+            self._risk_tasks.append(
+                asyncio.create_task(
+                    self._instrument_rotation_loop(self._risk_schedule.rotation_interval_seconds)
+                )
+            )
+        if self._risk_schedule.position_check_interval_seconds > 0:
+            self._risk_tasks.append(
+                asyncio.create_task(
+                    self._position_management_loop(
+                        self._risk_schedule.position_check_interval_seconds
+                    )
+                )
+            )
+        if self._risk_schedule.hedging_interval_seconds > 0:
+            self._risk_tasks.append(
+                asyncio.create_task(
+                    self._hedging_loop(self._risk_schedule.hedging_interval_seconds)
+                )
+            )
+        if self._risk_schedule.drift_check_interval_seconds > 0:
+            self._risk_tasks.append(
+                asyncio.create_task(
+                    self._drift_review_loop(self._risk_schedule.drift_check_interval_seconds)
+                )
+            )
+
+    def _collect_risk_snapshots(self) -> dict[str, dict[str, float]]:
+        snapshots: dict[str, dict[str, float]] = {}
+        for figi in self._data_engine.active_instruments():
+            book = self._data_engine.get_order_book(figi)
+            if not book:
+                continue
+            snapshots[figi] = {
+                "price": book.mid_price(),
+                "spread": book.spread(),
+                "atr": self._data_engine.atr(figi, periods=5),
+            }
+        return snapshots
+
+    async def _instrument_rotation_loop(self, interval: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                replacements = self._data_engine.rotate_instruments()
+                if replacements:
+                    detail = ",".join(f"{old}->{new}" for old, new in replacements)
+                    LOGGER.info("Scheduled rotation replaced instruments: %s", detail)
+                    self._audit_logger.log("RISK", "ROTATION", detail)
+        except asyncio.CancelledError:  # pragma: no cover - cancellation path
+            raise
+
+    async def _position_management_loop(self, interval: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                snapshots = self._collect_risk_snapshots()
+                if not snapshots:
+                    continue
+                adjustments = self._risk_engine.manage_positions(snapshots)
+                for adjustment in adjustments:
+                    self._record_position_adjustment(adjustment)
+        except asyncio.CancelledError:  # pragma: no cover - cancellation path
+            raise
+
+    async def _hedging_loop(self, interval: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                snapshots = self._collect_risk_snapshots()
+                if not snapshots:
+                    continue
+                prices = {figi: data["price"] for figi, data in snapshots.items()}
+                adjustments = self._risk_engine.hedge_portfolio(prices)
+                for adjustment in adjustments:
+                    self._record_position_adjustment(adjustment)
+                liquidity = self._risk_engine.forecast_liquidity(snapshots)
+                self._metrics.record_liquidity(liquidity)
+        except asyncio.CancelledError:  # pragma: no cover - cancellation path
+            raise
+
+    async def _drift_review_loop(self, interval: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                for figi in self._data_engine.active_instruments():
+                    history = self._data_engine.history(figi)
+                    if len(history) < 2:
+                        continue
+                    reference = [level.price for level in history[0].bids]
+                    current = [level.price for level in history[-1].bids]
+                    report = self._drift_detector.evaluate(reference, current)
+                    if report.triggered:
+                        self._risk_engine.record_drift(report)
+                        self._audit_logger.log(
+                            "RISK",
+                            "DRIFT_REVIEW",
+                            f"figi={figi};severity={report.severity};p={report.p_value:.4f}",
+                        )
+                        if report.alert:
+                            await self._notifications.notify_circuit_breaker(figi, report.severity)
+        except asyncio.CancelledError:  # pragma: no cover - cancellation path
+            raise
+
+    def _record_position_adjustment(self, adjustment: PositionAdjustment) -> None:
+        detail = (
+            f"figi={adjustment.figi};action={adjustment.action};"
+            f"qty={adjustment.quantity};reason={adjustment.reason}"
+        )
+        LOGGER.info("Risk adjustment: %s", detail)
+        self._audit_logger.log("RISK", f"POSITION_{adjustment.action.upper()}", detail)
 
     async def _await_startup_window(self) -> None:
         start = self._config.system.startup_time
@@ -494,9 +609,9 @@ class Orchestrator:
             )
         if self._config.training_schedule.enabled:
             self._training_task = asyncio.create_task(self._training_scheduler_loop())
+        self._start_risk_tasks()
         await self._prepare_initial_state()
         stream_factory = self._market_stream_factory()
-        rotation_counter = 0
         async def integrity_probe() -> bool:
             return await check_data_integrity(self._data_engine)
 
@@ -695,11 +810,6 @@ class Orchestrator:
                 await self._notifications.notify_circuit_breaker(
                     order_book.figi, drift.severity
                 )
-            rotation_counter += 1
-            if rotation_counter % 50 == 0:
-                replacements = self._data_engine.rotate_instruments()
-                if replacements:
-                    LOGGER.info("Rotated instruments: %s", replacements)
             if self._risk_engine.calibration_required():
                 enqueued = self._calibration.enqueue(
                     reason="drift",
@@ -730,6 +840,10 @@ class Orchestrator:
                 self._training_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._training_task
+            for task in self._risk_tasks:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
             await self._process_latency_alerts()
             await self._persist_checkpoint()
             await self._performance_reporter.maybe_emit()
