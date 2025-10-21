@@ -1,0 +1,111 @@
+"""Order execution logic."""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Optional
+
+from ..ml.engine import MLSignal
+from ..risk.engine import OrderPlan, RiskEngine
+from .client import BrokerClient, OrderRequest
+
+LOGGER = logging.getLogger(__name__)
+
+try:  # pragma: no cover - optional dependency
+    from tinkoff.invest import OrderDirection, OrderType
+except ImportError:  # pragma: no cover
+    OrderDirection = None  # type: ignore
+    OrderType = None  # type: ignore
+
+
+@dataclass
+class ExecutionReport:
+    figi: str
+    accepted: bool
+    reason: Optional[str] = None
+
+
+class ExecutionEngine:
+    def __init__(self, broker_factory, risk_engine: RiskEngine) -> None:
+        if OrderDirection is None or OrderType is None:
+            raise RuntimeError("tinkoff-investments SDK is required for execution")
+        self._broker_factory = broker_factory
+        self._risk_engine = risk_engine
+
+    async def execute_plan(
+        self, signal: MLSignal, plan: OrderPlan, price: float
+    ) -> ExecutionReport:
+        direction = (
+            OrderDirection.ORDER_DIRECTION_BUY
+            if signal.direction > 0
+            else OrderDirection.ORDER_DIRECTION_SELL
+        )
+        async with self._broker_factory() as broker:
+            try:
+                if plan.strategy == "vwap":
+                    await self._execute_vwap(broker, signal, plan, price, direction)
+                else:
+                    await self._execute_ioc(broker, signal, plan, price, direction)
+                self._risk_engine.register_order(plan.slices)
+                self._risk_engine.update_position(
+                    signal.figi,
+                    signal.direction * plan.quantity,
+                    price,
+                    plan.stop_loss,
+                )
+                return ExecutionReport(figi=signal.figi, accepted=True)
+            except Exception as exc:  # pragma: no cover - defensive branch
+                LOGGER.exception("Order placement failed: %s", exc)
+                return ExecutionReport(figi=signal.figi, accepted=False, reason=str(exc))
+
+    async def _execute_ioc(
+        self,
+        broker: BrokerClient,
+        signal: MLSignal,
+        plan: OrderPlan,
+        price: float,
+        direction,
+    ) -> None:
+        order = OrderRequest(
+            figi=signal.figi,
+            quantity=plan.quantity,
+            price=price,
+            direction=direction,
+            order_type=OrderType.ORDER_TYPE_MARKET,
+        )
+        await broker.place_order(order)
+
+    async def _execute_vwap(
+        self,
+        broker: BrokerClient,
+        signal: MLSignal,
+        plan: OrderPlan,
+        price: float,
+        direction,
+    ) -> None:
+        aggressive_qty = max(1, int(round(plan.quantity * plan.aggressiveness)))
+        aggressive_qty = min(plan.quantity, aggressive_qty)
+        passive_qty = plan.quantity - aggressive_qty
+        market_order = OrderRequest(
+            figi=signal.figi,
+            quantity=aggressive_qty,
+            price=price,
+            direction=direction,
+            order_type=OrderType.ORDER_TYPE_MARKET,
+        )
+        await broker.place_order(market_order)
+        if passive_qty <= 0:
+            return
+        price_adjustment = 0.0005 * price
+        limit_price = price + price_adjustment if signal.direction > 0 else price - price_adjustment
+        limit_order = OrderRequest(
+            figi=signal.figi,
+            quantity=passive_qty,
+            price=limit_price,
+            direction=direction,
+            order_type=OrderType.ORDER_TYPE_LIMIT,
+        )
+        await broker.place_order(limit_order)
+
+
+__all__ = ["ExecutionEngine", "ExecutionReport"]
