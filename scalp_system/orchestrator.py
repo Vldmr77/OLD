@@ -10,7 +10,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Deque, Optional
 
-from .broker.tinkoff import TinkoffAPI
+from .broker.tinkoff import (
+    TinkoffAPI,
+    TinkoffSDKUnavailable,
+    ensure_sdk_available,
+)
 from .config.base import OrchestratorConfig
 from .config.loader import load_config
 from .control.manual_override import ManualOverrideGuard
@@ -859,6 +863,16 @@ class Orchestrator:
 def run_from_yaml(path: str | Path) -> None:
     config = load_config(path)
     logging.basicConfig(level=getattr(logging, config.logging.level))
+    try:
+        ensure_sdk_available()
+    except TinkoffSDKUnavailable as exc:
+        LOGGER.error(
+            "Cannot start orchestrator without the tinkoff-investments SDK: %s", exc
+        )
+        LOGGER.error(
+            "Install the bundled wheel via scripts/install_vendor.py or pip before running."
+        )
+        raise SystemExit(1) from exc
     orchestrator = Orchestrator(config)
     asyncio.run(orchestrator.run())
 

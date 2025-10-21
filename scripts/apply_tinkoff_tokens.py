@@ -4,8 +4,18 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+VENDOR_PATH = PROJECT_ROOT / "scalp_system" / "vendor"
+if VENDOR_PATH.exists() and str(VENDOR_PATH) not in sys.path:
+    sys.path.insert(0, str(VENDOR_PATH))
 
 from scalp_system.config import DEFAULT_CONFIG_PATH
 from scalp_system.security.key_manager import KeyManager
