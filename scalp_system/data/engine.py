@@ -109,6 +109,9 @@ class DataEngine:
     def update_monitored_pool(self, instruments: Iterable[str]) -> None:
         self._monitored_pool = list(dict.fromkeys(instruments))
 
+    def active_instruments(self) -> tuple[str, ...]:
+        return tuple(self._active_instruments)
+
     def rotate_instruments(self) -> List[tuple[str, str]]:
         """Replace instruments that fail liquidity/volatility checks."""
 

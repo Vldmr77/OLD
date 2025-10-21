@@ -15,6 +15,7 @@ datafeed:
   history_length: 30
   soft_rss_limit_mb: 400
   hard_rss_limit_mb: 700
+  reconnect_delay: 1.0
 features:
   lob_levels: 10
   rolling_window: 20

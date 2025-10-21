@@ -46,7 +46,7 @@ def _ks_2samp(data1: List[float], data2: List[float]) -> tuple[float, float]:
 
 
 class DriftDetector:
-"""Detects distribution drift and persists daily JSON metrics."""
+    """Detects distribution drift and persists daily JSON metrics."""
 
     def __init__(self, *, threshold: float, history_dir: Path) -> None:
         self._threshold = threshold

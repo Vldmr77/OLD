@@ -118,5 +118,12 @@ class RiskEngine:
     def trading_halted(self) -> bool:
         return self._halt_trading
 
+    def notify_model_reload(self) -> None:
+        """Resume trading safeguards after successful model reload."""
+
+        self._halt_trading = False
+        self._calibration_required = False
+        self._calibration_expiry = None
+
 
 __all__ = ["RiskEngine", "RiskMetrics", "Position"]

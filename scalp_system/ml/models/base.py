@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from pathlib import Path
+from typing import Iterable, Optional, Sequence
 
 
 @dataclass
@@ -13,9 +14,26 @@ class ModelPrediction:
 
 
 class FeatureModel(ABC):
+    def __init__(self) -> None:
+        self._model_path: Optional[Path] = None
+
     @abstractmethod
     def predict(self, batch: Iterable[Sequence[float]]) -> list[ModelPrediction]:
         raise NotImplementedError
+
+    def load(self, path: Path) -> None:
+        """Load model weights from the provided path."""
+
+        resolved = path if isinstance(path, Path) else Path(path)
+        if not resolved.exists():
+            raise FileNotFoundError(f"Model file not found: {resolved}")
+        self._model_path = resolved
+
+    def reset(self) -> None:
+        """Reset transient interpreter state after reloading weights."""
+
+        # Default implementation is stateless.
+        return None
 
 
 class WeightedEnsemble:

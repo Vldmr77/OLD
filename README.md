@@ -13,6 +13,7 @@
 - `scalp_system.monitoring` — детектор дрейфа и метрики.
 - `scalp_system.ml.calibration` — постановка задач калибровки моделей.
 - `scalp_system.storage` — SQLite репозиторий для логирования сигналов.
+- `scalp_system.utils.integrity` — проверки целостности данных при переподключении.
 
 ## Запуск
 
@@ -33,3 +34,5 @@ python -m scalp_system config.example.yaml
 
 - Метрики дрейфа сохраняются в `runtime/drift_metrics/drift_metrics_YYYYMMDD.jsonl`.
 - Триггеры на калибровку пишутся в `runtime/calibration_queue.jsonl` с дедупликацией.
+- Резервные копии сигналов сохраняются в `runtime/signals.fallback.jsonl`, кеш состояния сбрасывается каждые 30 секунд.
+- Перезагрузка моделей очищает кэш фич, валидирует TFLite файлы и уведомляет RiskEngine.

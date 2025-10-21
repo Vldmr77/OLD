@@ -28,6 +28,7 @@ class DataFeedConfig:
     history_length: int = 30
     soft_rss_limit_mb: int = 400
     hard_rss_limit_mb: int = 700
+    reconnect_delay: float = 1.0
 
 
 @dataclass

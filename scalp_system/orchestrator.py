@@ -20,6 +20,7 @@ from .monitoring.drift import DriftDetector
 from .monitoring.metrics import MetricsRegistry
 from .risk.engine import RiskEngine
 from .storage.repository import SQLiteRepository
+from .utils.integrity import check_data_integrity
 from .utils.timing import timed
 
 LOGGER = logging.getLogger(__name__)
@@ -87,7 +88,14 @@ class Orchestrator:
         stream_factory = self._market_stream_factory()
         broker_factory = self._broker_factory()
         rotation_counter = 0
-        async for order_book in iterate_stream(stream_factory):
+        async def integrity_probe() -> bool:
+            return await check_data_integrity(self._data_engine)
+
+        async for order_book in iterate_stream(
+            stream_factory,
+            delay=self._config.datafeed.reconnect_delay,
+            integrity_check=integrity_probe,
+        ):
             self._data_engine.ingest_order_book(order_book)
             window = self._data_engine.last_window(
                 order_book.figi, self._config.features.rolling_window
@@ -141,6 +149,13 @@ class Orchestrator:
                 if enqueued:
                     LOGGER.info("Calibration request enqueued for %s", order_book.figi)
                     self._risk_engine.acknowledge_calibration()
+
+    def reload_models(self, model_dir: Path) -> None:
+        """Reload quantised models and clear cached feature state."""
+
+        self._feature_pipeline.reset_cache()
+        self._ml_engine.reload_models(model_dir)
+        self._risk_engine.notify_model_reload()
 
 
 def run_from_yaml(path: str | Path) -> None:

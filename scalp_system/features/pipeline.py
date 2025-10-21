@@ -22,6 +22,7 @@ class FeaturePipeline:
 
     def __init__(self, config: FeatureConfig) -> None:
         self._config = config
+        self._last_vector: Optional[FeatureVector] = None
 
     def transform(
         self,
@@ -46,7 +47,14 @@ class FeaturePipeline:
                     market.market_index,
                 ]
             )
-        return FeatureVector(figi=latest.figi, timestamp=latest.timestamp.timestamp(), features=feature_list)
+        vector = FeatureVector(figi=latest.figi, timestamp=latest.timestamp.timestamp(), features=feature_list)
+        self._last_vector = vector
+        return vector
+
+    def reset_cache(self) -> None:
+        """Clear any cached feature state before reloading models."""
+
+        self._last_vector = None
 
     def _micro_price(self, book: OrderBook) -> float:
         bids = book.bids[: self._config.lob_levels]
