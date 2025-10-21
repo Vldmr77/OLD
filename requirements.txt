@@ -1,0 +1,2 @@
+# Optional dependencies. Install manually if network access is available.
+PyYAML>=6.0
