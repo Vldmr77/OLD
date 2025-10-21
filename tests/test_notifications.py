@@ -290,3 +290,22 @@ def test_heartbeat_missed_notification_contains_reason():
     assert "HEARTBEAT_MISSED" in text
     assert "intervals=3" in text
     assert "reason=timeout" in text
+
+
+def test_fallback_signal_notification_bypasses_cooldown():
+    sounds: list[tuple[int, float]] = []
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(enable_sound_alerts=True),
+        http_sender=lambda *args, **kwargs: None,
+        sound_player=lambda freq, duration: sounds.append((freq, duration)),
+    )
+
+    sent = asyncio.run(
+        dispatcher.notify_fallback_signal(
+            "FIGI", reason="exception:long", confidence=0.7
+        )
+    )
+
+    assert sent is False
+    assert sounds[0][0] == dispatcher.config.high_risk_frequency_hz

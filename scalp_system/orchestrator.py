@@ -18,7 +18,8 @@ from .data.streams import MarketDataStream, iterate_stream
 from .execution.client import BrokerClient
 from .execution.executor import ExecutionEngine
 from .features.pipeline import FeaturePipeline
-from .ml.engine import MLEngine
+from .ml.engine import MLSignal, MLEngine
+from .ml.fallback import FallbackSignalGenerator
 from .ml.calibration import CalibrationCoordinator
 from .monitoring.audit import AuditLogger
 from .monitoring.drift import DriftDetector
@@ -84,6 +85,7 @@ class Orchestrator:
             interval_seconds=config.monitoring.heartbeat_interval_seconds,
             miss_threshold=config.monitoring.heartbeat_miss_threshold,
         )
+        self._fallback = FallbackSignalGenerator(config.fallback)
         self._connectivity = ConnectivityFailover(config.connectivity)
         self._latency_monitor = LatencyMonitor(
             config.system.latency_thresholds,
@@ -390,8 +392,38 @@ class Orchestrator:
                 with timed("features", self._handle_latency):
                     market = self._data_engine.market_indicators()
                     features = self._feature_pipeline.transform(window, market=market)
-                with timed("ml", self._handle_latency):
-                    signals = self._ml_engine.infer([features])
+                signals: list[MLSignal] = []
+                try:
+                    with timed("ml", self._handle_latency):
+                        signals = self._ml_engine.infer([features])
+                except Exception as exc:
+                    context = f"exception:{type(exc).__name__}"
+                    LOGGER.exception("ML inference failed; attempting fallback: %s", exc)
+                    fallback = self._fallback.generate(window, reason=context)
+                    if fallback is None:
+                        detail = self._fallback.last_rejection or "unavailable"
+                        self._audit_logger.log(
+                            "ML",
+                            "FALLBACK_UNAVAILABLE",
+                            f"figi={order_book.figi};reason={context};detail={detail}",
+                        )
+                        continue
+                    remaining = self._fallback.remaining_allowance()
+                    self._audit_logger.log(
+                        "ML",
+                        "FALLBACK_SIGNAL",
+                        (
+                            f"figi={fallback.signal.figi};reason={fallback.reason};"
+                            f"imbalance={fallback.imbalance:.3f};volatility={fallback.volatility:.4f};"
+                            f"quota_remaining={remaining}"
+                        ),
+                    )
+                    await self._notifications.notify_fallback_signal(
+                        fallback.signal.figi,
+                        fallback.reason,
+                        fallback.signal.confidence,
+                    )
+                    signals = [fallback.signal]
                 failover_detail = self._ml_engine.drain_failover_event()
                 if failover_detail:
                     mode = self._ml_engine.device_mode
@@ -403,6 +435,32 @@ class Orchestrator:
                 delay = self._ml_engine.throttle_delay
                 if delay > 0:
                     await asyncio.sleep(delay)
+                if not signals:
+                    fallback = self._fallback.generate(window, reason="no_signal")
+                    if fallback is None:
+                        detail = self._fallback.last_rejection or "no_fallback"
+                        self._audit_logger.log(
+                            "ML",
+                            "NO_SIGNAL",
+                            f"figi={order_book.figi};detail={detail}",
+                        )
+                        continue
+                    remaining = self._fallback.remaining_allowance()
+                    self._audit_logger.log(
+                        "ML",
+                        "FALLBACK_SIGNAL",
+                        (
+                            f"figi={fallback.signal.figi};reason={fallback.reason};"
+                            f"imbalance={fallback.imbalance:.3f};volatility={fallback.volatility:.4f};"
+                            f"quota_remaining={remaining}"
+                        ),
+                    )
+                    await self._notifications.notify_fallback_signal(
+                        fallback.signal.figi,
+                        fallback.reason,
+                        fallback.signal.confidence,
+                    )
+                    signals = [fallback.signal]
                 for signal in signals:
                     self._metrics.record_signal(signal.figi, signal.confidence)
                     self._repository.persist_signal(signal.figi, signal.direction, signal.confidence)

@@ -168,6 +168,21 @@ class NotificationDispatcher:
             cooldown_override=0,
         )
 
+    async def notify_fallback_signal(
+        self, figi: str, reason: str, confidence: float
+    ) -> bool:
+        message = (
+            "FALLBACK_SIGNAL "
+            f"figi={figi} reason={reason} confidence={confidence:.3f}"
+        )
+        return await self._dispatch(
+            key=f"fallback:{figi}",
+            message=message,
+            beep_frequency=self.config.high_risk_frequency_hz,
+            beep_duration=0.4,
+            cooldown_override=0,
+        )
+
     async def notify_heartbeat_missed(
         self,
         missed_intervals: int,

@@ -141,6 +141,21 @@ class NotificationConfig:
 
 
 @dataclass
+class FallbackConfig:
+    enabled: bool = True
+    max_signals_per_hour: int = 10
+    imbalance_threshold: float = 0.7
+    volatility_threshold: float = 0.01
+    confidence: float = 0.7
+
+    def ensure(self) -> None:
+        self.max_signals_per_hour = max(1, int(self.max_signals_per_hour))
+        self.imbalance_threshold = float(min(max(self.imbalance_threshold, 0.0), 1.0))
+        self.volatility_threshold = float(max(self.volatility_threshold, 0.0))
+        self.confidence = float(min(max(self.confidence, 0.0), 1.0))
+
+
+@dataclass
 class ConnectivityConfig:
     primary_label: str = "fiber"
     backup_label: str = "lte"
@@ -300,6 +315,7 @@ class OrchestratorConfig:
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
+    fallback: FallbackConfig = field(default_factory=FallbackConfig)
     connectivity: ConnectivityConfig = field(default_factory=ConnectivityConfig)
     manual_override: ManualOverrideConfig = field(default_factory=ManualOverrideConfig)
     reporting: ReportingConfig = field(default_factory=ReportingConfig)
@@ -318,6 +334,7 @@ class OrchestratorConfig:
         self.system.ensure()
         self.reporting.ensure()
         self.manual_override.ensure()
+        self.fallback.ensure()
         self.connectivity.ensure()
         self.monitoring.ensure()
         self.disaster_recovery.ensure()
@@ -327,6 +344,7 @@ class OrchestratorConfig:
         monitoring_data = _ensure_dict(data.get("monitoring", {}))
         security_data = _ensure_dict(data.get("security", {}))
         notifications_data = _ensure_dict(data.get("notifications", {}))
+        fallback_data = _ensure_dict(data.get("fallback", {}))
         connectivity_data = _ensure_dict(data.get("connectivity", {}))
         manual_override_data = _ensure_dict(data.get("manual_override", {}))
         training_data = _ensure_dict(data.get("training", {}))
@@ -371,6 +389,13 @@ class OrchestratorConfig:
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
             ),
             notifications=NotificationConfig(**notifications_data),
+            fallback=FallbackConfig(
+                enabled=fallback_data.get("enabled", True),
+                max_signals_per_hour=fallback_data.get("max_signals_per_hour", 10),
+                imbalance_threshold=fallback_data.get("imbalance_threshold", 0.7),
+                volatility_threshold=fallback_data.get("volatility_threshold", 0.01),
+                confidence=fallback_data.get("confidence", 0.7),
+            ),
             connectivity=ConnectivityConfig(
                 primary_label=connectivity_data.get("primary_label", "fiber"),
                 backup_label=connectivity_data.get("backup_label", "lte"),
@@ -479,6 +504,7 @@ __all__ = [
     "StorageConfig",
     "MonitoringConfig",
     "NotificationConfig",
+    "FallbackConfig",
     "SecurityConfig",
     "ManualOverrideConfig",
     "SystemConfig",

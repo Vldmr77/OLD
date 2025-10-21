@@ -72,6 +72,12 @@ notifications:
   enable_sound_alerts: false
   liquidity_spread_threshold_bps: 5.0
   cooldown_seconds: 30
+fallback:
+  enabled: true
+  max_signals_per_hour: 10
+  imbalance_threshold: 0.7
+  volatility_threshold: 0.01
+  confidence: 0.7
 connectivity:
   primary_label: fiber
   backup_label: lte
