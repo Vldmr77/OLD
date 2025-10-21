@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional
@@ -16,7 +17,7 @@ from .models.volatility_svm import VolatilityClusterSVM
 
 LOGGER = logging.getLogger(__name__)
 
-_MIN_MODEL_SIZE = 1024
+DEFAULT_MODEL_DIR = Path(__file__).resolve().parent / "default_models"
 
 
 @dataclass
@@ -51,6 +52,8 @@ class MLEngine:
         self._device_mode = "gpu"
         self._throttle_delay = 0.0
         self._pending_failover: Optional[str] = None
+        self._model_dir = Path(config.model_dir)
+        self._initialise_models()
 
     def infer(self, batch: Iterable[FeatureVector]) -> list[MLSignal]:
         batch = list(batch)
@@ -103,10 +106,12 @@ class MLEngine:
             path = base_dir / filename
             if not path.exists():
                 raise FileNotFoundError(f"Missing model file: {path}")
-            if path.stat().st_size < _MIN_MODEL_SIZE:
+            try:
+                self._models[name].load(path)
+            except Exception as exc:  # pragma: no cover - validation guard
+                LOGGER.warning("Failed to load model %s: %s", path, exc)
                 corrupted.add(name)
                 continue
-            self._models[name].load(path)
             self._models[name].reset()
         if corrupted:
             LOGGER.warning("Detected corrupted models %s, retraining ensemble", sorted(corrupted))
@@ -134,15 +139,28 @@ class MLEngine:
         return self._base_weights
 
     def train_all_models(self, model_dir: Path) -> None:
-        """Fallback training stub to rebuild placeholder TFLite models."""
+        """Rehydrate model weights by copying the packaged defaults."""
 
         base_dir = Path(model_dir)
         base_dir.mkdir(parents=True, exist_ok=True)
-        LOGGER.critical("CRITICAL: Model training failure - rebuilding models")
-        payload = b"0" * (_MIN_MODEL_SIZE * 2)
-        for filename in self._model_files.values():
-            path = base_dir / filename
-            path.write_bytes(payload)
+        for name, filename in self._model_files.items():
+            source = DEFAULT_MODEL_DIR / filename
+            if not source.exists():
+                raise FileNotFoundError(f"Default model missing: {source}")
+            target = base_dir / filename
+            shutil.copy2(source, target)
+
+    def _initialise_models(self) -> None:
+        try:
+            self.reload_models(self._model_dir)
+        except FileNotFoundError:
+            LOGGER.info("Model directory %s missing; seeding defaults", self._model_dir)
+            self.train_all_models(self._model_dir)
+            self.reload_models(self._model_dir)
+        except ValueError as exc:  # pragma: no cover - invalid defaults
+            LOGGER.warning("Invalid model payload detected: %s", exc)
+            self.train_all_models(self._model_dir)
+            self.reload_models(self._model_dir)
 
     def _should_failover(self, exc: RuntimeError) -> bool:
         message = str(exc).lower()

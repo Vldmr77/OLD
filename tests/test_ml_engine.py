@@ -1,8 +1,11 @@
 import pytest
+import json
+
+import pytest
 
 from scalp_system.config.base import MLConfig
 from scalp_system.features.pipeline import FeatureVector
-from scalp_system.ml.engine import MLEngine, _MIN_MODEL_SIZE
+from scalp_system.ml.engine import MLEngine
 
 
 def test_ml_engine_produces_signal():
@@ -24,11 +27,17 @@ def test_ml_engine_reload_recovers_corrupted(tmp_path):
     model_dir.mkdir()
     for idx, (name, filename) in enumerate(engine._model_files.items()):  # type: ignore[attr-defined]
         path = model_dir / filename
-        size = _MIN_MODEL_SIZE * 2 if idx == 0 else 256
-        path.write_bytes(b"1" * size)
+        if idx == 0:
+            path.write_text("{\"weights\": []}", encoding="utf-8")
+        else:
+            path.write_text("not-json", encoding="utf-8")
     engine.reload_models(model_dir)
-    for filename in engine._model_files.values():  # type: ignore[attr-defined]
-        assert (model_dir / filename).stat().st_size >= _MIN_MODEL_SIZE * 2
+    for name, filename in engine._model_files.items():  # type: ignore[attr-defined]
+        payload = json.loads((model_dir / filename).read_text(encoding="utf-8"))
+        if name == "gbdt_feat":
+            assert "stages" in payload and payload["stages"]
+        else:
+            assert "weights" in payload and payload["weights"]
 
 
 def test_gpu_failure_triggers_cpu_fallback(monkeypatch):

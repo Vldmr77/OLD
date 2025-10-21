@@ -107,6 +107,7 @@ features:
   rolling_window: 20
 ml:
   batch_size: 64
+  model_dir: ./runtime/models
   weights:
     lstm_ob: 0.35
     gbdt_features: 0.25

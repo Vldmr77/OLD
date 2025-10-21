@@ -6,6 +6,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Literal, Optional
 
+DEFAULT_MODEL_DIR = Path(__file__).resolve().parents[1] / "ml" / "default_models"
+
 
 @dataclass
 class LoggingConfig:
@@ -107,6 +109,7 @@ class MLConfig:
     weights: ModelWeights = field(default_factory=ModelWeights)
     drift_threshold: float = 0.05
     class_weights: Dict[str, ModelWeights] = field(default_factory=dict)
+    model_dir: Path = field(default_factory=lambda: DEFAULT_MODEL_DIR)
 
     def ensure(self) -> None:
         self.weights.normalise()
@@ -124,6 +127,15 @@ class MLConfig:
             copy.normalise()
             cleaned[str(key).lower()] = copy
         self.class_weights = cleaned
+        if not isinstance(self.model_dir, Path):
+            self.model_dir = Path(self.model_dir).expanduser()
+        else:
+            self.model_dir = self.model_dir.expanduser()
+        if not self.model_dir.exists():
+            try:
+                self.model_dir.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
 
 
 @dataclass
@@ -499,6 +511,7 @@ class OrchestratorConfig:
                 weights=ModelWeights(**weights_data),
                 drift_threshold=ml_data.get("drift_threshold", 0.05),
                 class_weights=class_weights_data,
+                model_dir=_to_path(ml_data.get("model_dir", DEFAULT_MODEL_DIR)),
             ),
             risk=RiskLimits(**_ensure_dict(data.get("risk", {}))),
             execution=ExecutionConfig(**_ensure_dict(data.get("execution", {}))),

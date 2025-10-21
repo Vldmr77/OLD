@@ -1,17 +1,25 @@
-"""SVM style volatility clustering placeholder."""
 from __future__ import annotations
 
-import math
+"""Volatility clustering surrogate for SVM-style decisions."""
+
+import json
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .base import FeatureModel, ModelPrediction
+from .base import LinearFeatureModel, ModelPrediction
 
 
-class VolatilityClusterSVM(FeatureModel):
+class VolatilityClusterSVM(LinearFeatureModel):
+    """Applies a margin to tanh-projected volatility estimates."""
+
     def __init__(self) -> None:
-        super().__init__()
-        self._state: dict[str, float] = {}
+        super().__init__(activation="tanh", clip=1.0)
+        self._margin: float = 0.1
+
+    def load(self, path: Path) -> None:
+        super().load(path)
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        self._margin = max(0.0, float(payload.get("margin", 0.1)))
 
     def predict(self, batch: Iterable[Sequence[float]]) -> list[ModelPrediction]:
         predictions: list[ModelPrediction] = []
@@ -19,20 +27,12 @@ class VolatilityClusterSVM(FeatureModel):
             if not features:
                 predictions.append(ModelPrediction(score=0.0, confidence=0.0))
                 continue
-            mean_value = sum(features) / len(features)
-            variance = sum((value - mean_value) ** 2 for value in features) / len(features)
-            volatility = math.sqrt(variance)
-            score = max(-1.0, min(1.0, volatility - 0.5))
-            confidence = max(0.0, min(1.0, volatility / 2.0))
+            score = self._activate(self._project(features))
+            if abs(score) < self._margin:
+                score = 0.0
+            confidence = self._confidence(score)
             predictions.append(ModelPrediction(score=score, confidence=confidence))
         return predictions
-
-    def load(self, path: Path) -> None:
-        super().load(path)
-        self.reset()
-
-    def reset(self) -> None:
-        self._state.clear()
 
 
 __all__ = ["VolatilityClusterSVM"]

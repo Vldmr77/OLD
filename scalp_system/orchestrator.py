@@ -313,7 +313,7 @@ class Orchestrator:
             ),
         )
         try:
-            self.reload_models(report.output_path.parent)
+            self.reload_models(report.model_dir)
         except Exception as exc:  # pragma: no cover - reload issues
             LOGGER.exception("Model reload after training failed: %s", exc)
 

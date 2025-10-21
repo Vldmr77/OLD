@@ -1,4 +1,5 @@
 import json
+import json
 
 import pytest
 
@@ -44,6 +45,16 @@ def test_model_trainer_outputs_weights(tmp_path):
         "svm_volatility",
     }
     assert sum(weights.values()) == pytest.approx(1.0, rel=1e-6)
+    assert report.model_dir.exists()
+    expected_files = {
+        "lstm_ob.tflite": "weights",
+        "gbdt_features.tflite": "stages",
+        "temporal_transformer.tflite": "weights",
+        "volatility_svm.tflite": "weights",
+    }
+    for filename, key in expected_files.items():
+        payload = json.loads((report.model_dir / filename).read_text(encoding="utf-8"))
+        assert key in payload
     assert report.quantization_plan is not None
     plan_entries = json.loads(report.quantization_plan.read_text(encoding="utf-8"))
     assert plan_entries

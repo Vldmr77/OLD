@@ -1,37 +1,46 @@
-"""LSTM model placeholder for order book sequences."""
 from __future__ import annotations
 
+"""Stateful approximation of an LSTM-based order book model."""
+
+import json
+import math
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from .base import FeatureModel, ModelPrediction
+from .base import LinearFeatureModel, ModelPrediction
 
 
-class LSTMOrderBookModel(FeatureModel):
-    def __init__(self, *, hidden_size: int = 64) -> None:
-        super().__init__()
-        self.hidden_size = hidden_size
-        self._state: dict[str, float] = {}
+class LSTMOrderBookModel(LinearFeatureModel):
+    """Applies an exponentially-smoothed projection over feature windows."""
+
+    def __init__(self) -> None:
+        super().__init__(activation="tanh", clip=1.0)
+        self._momentum: float = 0.6
+        self._hidden_state: float = 0.0
+
+    def load(self, path: Path) -> None:
+        super().load(path)
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        self._momentum = float(payload.get("momentum", 0.6))
+        self.reset()
+
+    def reset(self) -> None:
+        self._hidden_state = 0.0
 
     def predict(self, batch: Iterable[Sequence[float]]) -> list[ModelPrediction]:
-        predictions = []
+        predictions: list[ModelPrediction] = []
         for features in batch:
             if not features:
                 predictions.append(ModelPrediction(score=0.0, confidence=0.0))
                 continue
-            mean_value = sum(features) / len(features)
-            score = max(-1.0, min(1.0, mean_value / 10))
-            norm = sum(value * value for value in features) ** 0.5
-            confidence = max(0.0, min(1.0, norm / 100))
+            projection = self._project(features)
+            self._hidden_state = (
+                self._momentum * self._hidden_state + (1.0 - self._momentum) * projection
+            )
+            score = math.tanh(self._hidden_state)
+            confidence = self._confidence(score)
             predictions.append(ModelPrediction(score=score, confidence=confidence))
         return predictions
-
-    def load(self, path: Path) -> None:
-        super().load(path)
-        self.reset()
-
-    def reset(self) -> None:
-        self._state.clear()
 
 
 __all__ = ["LSTMOrderBookModel"]
