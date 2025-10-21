@@ -1,0 +1,48 @@
+environment: development
+logging:
+  level: INFO
+datafeed:
+  sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
+  use_sandbox: true
+  instruments:
+    - BBG004730ZJ9
+  monitored_instruments:
+    - BBG004731032
+    - BBG004730N88
+  depth: 10
+  current_cache_ttl: 60
+  current_cache_size: 50
+  history_length: 30
+  soft_rss_limit_mb: 400
+  hard_rss_limit_mb: 700
+  reconnect_delay: 1.0
+features:
+  lob_levels: 10
+  rolling_window: 20
+ml:
+  batch_size: 64
+  weights:
+    lstm_ob: 0.35
+    gbdt_features: 0.25
+    transformer_temporal: 0.25
+    svm_volatility: 0.15
+risk:
+  max_position: 50
+execution:
+  account_id: ""
+storage:
+  base_path: ./runtime
+monitoring:
+  cpu_soft_limit: 90.0
+  memory_soft_limit: 85.0
+  gpu_soft_limit: 90.0
+  audit_log_filename: audit.log
+security:
+  encryption_key_path: ./runtime/secret.key
+training:
+  dataset_path: ./data/training.jsonl
+  output_dir: ./models
+  epochs: 5
+  learning_rate: 0.01
+  validation_split: 0.2
+  min_samples: 10
