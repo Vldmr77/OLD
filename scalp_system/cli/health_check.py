@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from scalp_system.config import DEFAULT_CONFIG_PATH
 from scalp_system.config.loader import load_config
 from scalp_system.ml.calibration import CalibrationCoordinator
 from scalp_system.monitoring.drift import DriftDetector
@@ -27,7 +28,12 @@ def run_health_checks(config_path: Path) -> None:
 def main() -> None:
     """CLI entry point for running health checks."""
     parser = argparse.ArgumentParser(description="Run system health checks")
-    parser.add_argument("--config", type=Path, default=Path("config.example.yaml"))
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to YAML configuration (defaults to packaged example)",
+    )
     args = parser.parse_args()
     run_health_checks(args.config)
 

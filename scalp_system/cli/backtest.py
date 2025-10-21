@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
+from ..config import DEFAULT_CONFIG_PATH
 from ..config.loader import load_config
 from ..simulation.backtest import BacktestEngine
 
@@ -33,7 +34,12 @@ def run_backtest(config_path: str | Path, dataset: Optional[str] = None, output:
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Run offline scalping strategy backtests")
-    parser.add_argument("config", help="Path to YAML configuration file")
+    parser.add_argument(
+        "config",
+        nargs="?",
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to YAML configuration file (defaults to packaged example)",
+    )
     parser.add_argument("--dataset", help="Override dataset path", default=None)
     parser.add_argument("--output", help="Optional JSON report path", default=None)
     args = parser.parse_args(argv)

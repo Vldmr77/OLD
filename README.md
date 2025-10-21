@@ -28,11 +28,18 @@
 ## Запуск
 
 ```bash
-pip install --no-index tinkoff_investments-0.2.0b117-py3-none-any.whl  # локальная установка SDK
-python -m scalp_system config.example.yaml
+python scripts/install_vendor.py  # устанавливает зависимости в scalp_system/vendor
+python scripts/apply_tinkoff_tokens.py --sandbox-token <TOKEN> --production-token <TOKEN>
+python -m scalp_system  # использует пакетный config.example.yaml по умолчанию
 ```
 
 При отсутствии поддержки YAML можно использовать JSON-конфигурацию (`config.json`).
+Конфигурация по умолчанию лежит в `scalp_system/config/config.example.yaml` и
+используется всеми CLI инструментами, если не указать иной путь.
+
+Скрипт `apply_tinkoff_tokens.py` может зашифровать токены, если передать ключ Fernet через
+`--key path/to/key`. Значения также можно задавать переменными окружения
+`TINKOFF_SANDBOX_TOKEN` и `TINKOFF_PRODUCTION_TOKEN`.
 
 ### Работа с tinkoff-investments SDK
 
@@ -40,12 +47,14 @@ python -m scalp_system config.example.yaml
 подписанную версию `tinkoff_investments-0.2.0b117-py3-none-any.whl`. Установите её перед запуском:
 
 ```bash
-pip install --no-index tinkoff_investments-0.2.0b117-py3-none-any.whl
+python scripts/install_vendor.py --no-requirements --target ./scalp_system/vendor
 ```
 
-После установки доступны высокоуровневые обёртки `scalp_system.broker.TinkoffAPI`, а также
-`MarketDataStream` и `BrokerClient`, которые используются оркестратором и тестами. При отсутствии SDK
-будет выброшено понятное исключение с подсказкой по установке.
+Скрипт установит SDK и зависимости в локальную папку `vendor`, которая автоматически
+подхватывается при импорте пакета. После установки доступны высокоуровневые обёртки
+`scalp_system.broker.TinkoffAPI`, а также `MarketDataStream` и `BrokerClient`, которые
+используются оркестратором и тестами. При отсутствии SDK будет выброшено понятное
+исключение с подсказкой по установке.
 
 `TinkoffAPI` реализует методы `fetch_order_book`, `fetch_trades`, `fetch_candles` и `fetch_portfolio`,
 дополняя потоковый слой асинхронным REST-доступом к стаканам, сделкам, свечам и состоянию счёта.
@@ -78,10 +87,10 @@ python -m scalp_system.cli.dashboard --repository ./runtime/signals.sqlite3 --ho
 ## Дополнительные утилиты
 
 - `python -m scalp_system.cli.init_config --env production`
-- `python -m scalp_system.cli.model_trainer calibrate --config config.example.yaml`
+- `python -m scalp_system.cli.model_trainer calibrate`
 - `python -m scalp_system.cli.model_trainer train --dataset data/training.jsonl --output runtime/models`
-- `python -m scalp_system.cli.health_check --config config.example.yaml`
-- `python -m scalp_system.cli.backtest config.example.yaml --dataset data/backtest.jsonl --output runtime/reports/backtest.json`
+- `python -m scalp_system.cli.health_check`
+- `python -m scalp_system.cli.backtest --dataset data/backtest.jsonl --output runtime/reports/backtest.json`
 
 Секция `notifications` конфигурации задаёт параметры Telegram-уведомлений и локальных
 звуковых сигналов. При указании токена и идентификатора чата система отправляет

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scalp_system.config import DEFAULT_CONFIG_PATH
 from scalp_system.config.loader import load_config
 from scalp_system.ml.training import ModelTrainer
 
@@ -64,12 +65,18 @@ def main() -> None:
 
     calibrate_parser = subparsers.add_parser("calibrate", help="Normalise ensemble weights")
     calibrate_parser.add_argument(
-        "--config", type=Path, default=Path("config.example.yaml"), help="Path to config file"
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to config file (defaults to packaged example)",
     )
 
     train_parser = subparsers.add_parser("train", help="Run offline training")
     train_parser.add_argument(
-        "--config", type=Path, default=Path("config.example.yaml"), help="Path to config file"
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to config file (defaults to packaged example)",
     )
     train_parser.add_argument(
         "--dataset", type=Path, help="Override training dataset path"
