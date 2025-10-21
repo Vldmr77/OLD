@@ -68,6 +68,23 @@ class NotificationDispatcher:
             beep_duration=0.3,
         )
 
+    async def notify_latency_violation(
+        self, stage: str, latency_ms: float, threshold_ms: float, severity: str
+    ) -> bool:
+        prefix = "LATENCY_CRITICAL" if severity == "critical" else "LATENCY_WARN"
+        message = (
+            f"{prefix} stage={stage} latency={latency_ms:.2f}ms threshold={threshold_ms:.2f}ms"
+        )
+        return await self._dispatch(
+            key=f"latency:{stage}",
+            message=message,
+            beep_frequency=self.config.high_risk_frequency_hz
+            if severity == "critical"
+            else None,
+            beep_duration=0.4,
+            cooldown_override=0 if severity == "critical" else None,
+        )
+
     async def _dispatch(
         self,
         *,

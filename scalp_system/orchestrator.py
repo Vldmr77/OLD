@@ -4,9 +4,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from collections import deque
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Deque, Optional
 
 from .config.base import OrchestratorConfig
 from .config.loader import load_config
@@ -19,11 +21,13 @@ from .ml.engine import MLEngine
 from .ml.calibration import CalibrationCoordinator
 from .monitoring.audit import AuditLogger
 from .monitoring.drift import DriftDetector
+from .monitoring.latency import LatencyAlert, LatencyMonitor
 from .monitoring.metrics import MetricsRegistry
 from .monitoring.notifications import NotificationDispatcher
 from .monitoring.resource import ResourceMonitor
 from .risk.engine import RiskEngine
 from .security import KeyManager
+from .storage.checkpoint import CheckpointManager
 from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
@@ -57,6 +61,7 @@ class Orchestrator:
             hard_rss_limit_mb=config.datafeed.hard_rss_limit_mb,
         )
         self._data_engine.update_active_instruments(config.datafeed.instruments)
+        self._data_engine.update_monitored_pool(config.datafeed.monitored_instruments)
         self._calibration = CalibrationCoordinator(
             queue_path=config.storage.base_path / "calibration_queue.jsonl"
         )
@@ -69,6 +74,15 @@ class Orchestrator:
             gpu_threshold=config.monitoring.gpu_soft_limit,
         )
         self._notifications = NotificationDispatcher(config.notifications)
+        self._latency_monitor = LatencyMonitor(
+            config.system.latency_thresholds,
+            violation_limit=config.system.latency_violation_limit,
+        )
+        self._latency_events: Deque[LatencyAlert] = deque()
+        self._checkpoint_manager = CheckpointManager(
+            config.storage.base_path / "checkpoint.json"
+        )
+        self._checkpoint_task: Optional[asyncio.Task] = None
         self._key_manager: Optional[KeyManager] = None
         key_path = config.security.encryption_key_path
         env_key = os.getenv("SCALP_ENCRYPTION_KEY")
@@ -80,6 +94,7 @@ class Orchestrator:
         except ValueError:
             LOGGER.exception("Failed to load encryption key")
             self._key_manager = None
+        self._restore_from_checkpoint()
 
     def _market_stream_factory(self) -> Callable[[], MarketDataStream]:
         token = (
@@ -121,23 +136,109 @@ class Orchestrator:
             return token
         return self._key_manager.maybe_decrypt(token)
 
+    def _handle_latency(self, stage: str, latency_ms: float) -> None:
+        self._metrics.record_latency(stage, latency_ms)
+        alert = self._latency_monitor.observe(stage, latency_ms)
+        if alert:
+            self._latency_events.append(alert)
+
+    def _restore_from_checkpoint(self) -> None:
+        state = self._checkpoint_manager.load()
+        if not state:
+            return
+        data_state = state.get("data")
+        if isinstance(data_state, dict):
+            self._data_engine.restore(data_state)
+            LOGGER.info("Restored data engine state from checkpoint")
+        risk_state = state.get("risk")
+        if isinstance(risk_state, dict):
+            self._risk_engine.restore(risk_state)
+            LOGGER.info("Restored risk engine state from checkpoint")
+
+    async def _await_startup_window(self) -> None:
+        start = self._config.system.startup_time
+        if not start:
+            return
+        try:
+            hour, minute = (int(part) for part in start.split(":", 1))
+        except ValueError:
+            LOGGER.warning("Invalid startup_time format: %s", start)
+            return
+        now = datetime.now()
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if now >= target:
+            return
+        wait_seconds = (target - now).total_seconds()
+        LOGGER.info("Waiting %.0f seconds for startup window", wait_seconds)
+        await asyncio.sleep(wait_seconds)
+
+    def _snapshot_state(self) -> dict:
+        return {
+            "timestamp": datetime.utcnow().isoformat(),
+            "mode": self._config.system.mode,
+            "risk": self._risk_engine.snapshot(),
+            "data": self._data_engine.snapshot(),
+        }
+
+    async def _persist_checkpoint(self) -> None:
+        state = self._snapshot_state()
+        await asyncio.to_thread(self._checkpoint_manager.persist, state)
+
+    async def _checkpoint_loop(self, interval: int) -> None:
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                await self._persist_checkpoint()
+        except asyncio.CancelledError:  # pragma: no cover - cancellation path
+            raise
+
+    async def _process_latency_alerts(self) -> None:
+        while self._latency_events:
+            alert = self._latency_events.popleft()
+            LOGGER.warning(
+                "Latency %s breach stage=%s latency=%.2f threshold=%.2f",
+                alert.severity,
+                alert.stage,
+                alert.latency_ms,
+                alert.threshold_ms,
+            )
+            self._audit_logger.log(
+                "RESOURCE",
+                "LATENCY",
+                f"stage={alert.stage};latency={alert.latency_ms:.2f};threshold={alert.threshold_ms:.2f};severity={alert.severity}",
+            )
+            if alert.severity == "critical":
+                self._risk_engine.trigger_emergency_halt(f"latency:{alert.stage}")
+            await self._notifications.notify_latency_violation(
+                alert.stage,
+                alert.latency_ms,
+                alert.threshold_ms,
+                alert.severity,
+            )
+
     async def run(self) -> None:
+        await self._await_startup_window()
+        interval = int(self._config.system.checkpoint_interval_seconds)
+        if interval > 0:
+            self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(interval))
         stream_factory = self._market_stream_factory()
         broker_factory = self._broker_factory()
         rotation_counter = 0
         async def integrity_probe() -> bool:
             return await check_data_integrity(self._data_engine)
 
-        async for order_book in iterate_stream(
-            stream_factory,
-            delay=self._config.datafeed.reconnect_delay,
-            integrity_check=integrity_probe,
-        ):
-            snapshot, mitigations = self._resource_monitor.check_thresholds()
-            if mitigations:
-                LOGGER.warning(
-                    "Resource pressure detected cpu=%.1f mem=%.1f gpu=%s actions=%s",
-                    snapshot.cpu_percent,
+        try:
+            async for order_book in iterate_stream(
+                stream_factory,
+                delay=self._config.datafeed.reconnect_delay,
+                integrity_check=integrity_probe,
+            ):
+                await self._process_latency_alerts()
+                snapshot, mitigations = self._resource_monitor.check_thresholds()
+                if mitigations:
+                    LOGGER.warning(
+                        "Resource pressure detected cpu=%.1f mem=%.1f gpu=%s actions=%s",
+                        snapshot.cpu_percent,
                     snapshot.memory_percent,
                     f"{snapshot.gpu_memory_percent:.1f}" if snapshot.gpu_memory_percent is not None else "n/a",
                     mitigations,
@@ -170,23 +271,27 @@ class Orchestrator:
             )
             if len(window) < 2:
                 continue
-            with timed("features", self._metrics.record_latency):
+            with timed("features", self._handle_latency):
                 market = self._data_engine.market_indicators()
                 features = self._feature_pipeline.transform(window, market=market)
-            with timed("ml", self._metrics.record_latency):
+            with timed("ml", self._handle_latency):
                 signals = self._ml_engine.infer([features])
             for signal in signals:
                 self._metrics.record_signal(signal.figi, signal.confidence)
                 self._repository.persist_signal(signal.figi, signal.direction, signal.confidence)
-                if not self._risk_engine.evaluate_signal(signal, order_book.mid_price()):
+                with timed("risk", self._handle_latency):
+                    allowed = self._risk_engine.evaluate_signal(
+                        signal, order_book.mid_price()
+                    )
+                if not allowed:
                     LOGGER.info("Signal rejected by risk engine")
                     self._audit_logger.log(
                         "ORDER", "REJECTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
                     )
                     continue
-                report = await ExecutionEngine(broker_factory, self._risk_engine).execute_signal(
-                    signal, order_book.mid_price()
-                )
+                report = await ExecutionEngine(
+                    broker_factory, self._risk_engine
+                ).execute_signal(signal, order_book.mid_price(), skip_risk=True)
                 if report.accepted:
                     LOGGER.info("Order executed for %s", signal.figi)
                     self._audit_logger.log(
@@ -200,6 +305,8 @@ class Orchestrator:
                     self._audit_logger.log(
                         "ORDER", "FAILED", f"figi={signal.figi};reason={report.reason}"
                     )
+            risk_metrics = self._risk_engine.metrics({order_book.figi: order_book.mid_price()})
+            self._metrics.record_risk(order_book.figi, risk_metrics.var_value)
             history = self._data_engine.history(order_book.figi)
             reference = [level.price for level in history[0].bids] if len(history) else []
             current = [level.price for level in order_book.bids]
@@ -238,6 +345,13 @@ class Orchestrator:
                 if enqueued:
                     LOGGER.info("Calibration request enqueued for %s", order_book.figi)
                     self._risk_engine.acknowledge_calibration()
+        finally:
+            if self._checkpoint_task:
+                self._checkpoint_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._checkpoint_task
+            await self._process_latency_alerts()
+            await self._persist_checkpoint()
 
     def reload_models(self, model_dir: Path) -> None:
         """Reload quantised models and clear cached feature state."""

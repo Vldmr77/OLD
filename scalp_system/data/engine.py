@@ -113,6 +113,20 @@ class DataEngine:
     def active_instruments(self) -> tuple[str, ...]:
         return tuple(self._active_instruments)
 
+    def snapshot(self) -> dict:
+        return {
+            "active_instruments": list(self._active_instruments),
+            "monitored_instruments": list(self._monitored_pool),
+        }
+
+    def restore(self, payload: dict) -> None:
+        active = payload.get("active_instruments")
+        if isinstance(active, list):
+            self.update_active_instruments(active)
+        monitored = payload.get("monitored_instruments")
+        if isinstance(monitored, list):
+            self.update_monitored_pool(monitored)
+
     def rotate_instruments(self) -> List[tuple[str, str]]:
         """Replace instruments that fail liquidity/volatility checks."""
 

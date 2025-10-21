@@ -133,6 +133,36 @@ class NotificationConfig:
 
 
 @dataclass
+class SystemConfig:
+    mode: Literal["development", "forward-test", "production"] = "development"
+    startup_time: Optional[str] = None
+    checkpoint_interval_seconds: int = 300
+    latency_thresholds: Dict[str, float] = field(
+        default_factory=lambda: {
+            "features": 12.0,
+            "ml": 20.0,
+            "risk": 8.0,
+        }
+    )
+    latency_violation_limit: int = 3
+
+    def ensure(self) -> None:
+        if self.checkpoint_interval_seconds < 0:
+            self.checkpoint_interval_seconds = 0
+        self.latency_violation_limit = max(1, self.latency_violation_limit)
+        if not isinstance(self.latency_thresholds, dict):
+            self.latency_thresholds = {
+                "features": 12.0,
+                "ml": 20.0,
+                "risk": 8.0,
+            }
+        else:
+            defaults = {"features": 12.0, "ml": 20.0, "risk": 8.0}
+            merged = {**defaults, **self.latency_thresholds}
+            self.latency_thresholds = merged
+
+
+@dataclass
 class TrainingConfig:
     dataset_path: Path = Path("./data/training.jsonl")
     output_dir: Path = Path("./models")
@@ -189,12 +219,14 @@ class OrchestratorConfig:
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
 
     def __post_init__(self) -> None:
         self.storage.ensure()
         self.ml.weights.normalise()
         self.training.ensure()
         self.backtest.ensure()
+        self.system.ensure()
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
@@ -203,6 +235,7 @@ class OrchestratorConfig:
         notifications_data = _ensure_dict(data.get("notifications", {}))
         training_data = _ensure_dict(data.get("training", {}))
         backtest_data = _ensure_dict(data.get("backtest", {}))
+        system_data = _ensure_dict(data.get("system", {}))
         encryption_value = security_data.get("encryption_key_path")
         return cls(
             environment=data.get("environment", "development"),
@@ -239,6 +272,13 @@ class OrchestratorConfig:
                 transaction_cost_bps=backtest_data.get("transaction_cost_bps", 1.0),
                 slippage_bps=backtest_data.get("slippage_bps", 0.5),
                 max_orders=backtest_data.get("max_orders", 1000),
+            ),
+            system=SystemConfig(
+                mode=system_data.get("mode", "development"),
+                startup_time=system_data.get("startup_time"),
+                checkpoint_interval_seconds=system_data.get("checkpoint_interval_seconds", 300),
+                latency_thresholds=_ensure_dict(system_data.get("latency_thresholds", {})),
+                latency_violation_limit=system_data.get("latency_violation_limit", 3),
             ),
         )
 
@@ -285,6 +325,7 @@ __all__ = [
     "MonitoringConfig",
     "NotificationConfig",
     "SecurityConfig",
+    "SystemConfig",
     "TrainingConfig",
     "BacktestConfig",
     "OrchestratorConfig",

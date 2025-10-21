@@ -59,3 +59,20 @@ def test_risk_engine_cooldown_after_consecutive_losses(monkeypatch):
     monkeypatch.setattr(engine, "_loss_cooldown_until", cooldown_expired)
     allowed = engine.evaluate_signal(MLSignal(figi="FIGI", direction=1, confidence=0.8), price=100)
     assert allowed is True
+
+
+def test_risk_engine_snapshot_and_restore_preserves_state():
+    limits = RiskLimits(max_position=5, max_daily_loss=100)
+    engine = RiskEngine(limits)
+    engine.update_position("FIGI", 1, price=100)
+    engine.update_position("FIGI", -1, price=90)
+    engine.trigger_emergency_halt("latency:features")
+    snapshot = engine.snapshot()
+
+    restored = RiskEngine(limits)
+    restored.restore(snapshot)
+
+    assert restored.trading_halted() is True
+    restored_state = restored.snapshot()
+    assert restored_state["positions"][0]["figi"] == "FIGI"
+    assert restored_state["realized_pnl"] == snapshot["realized_pnl"]

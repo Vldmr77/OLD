@@ -1,3 +1,12 @@
+system:
+  mode: forward-test
+  startup_time: "09:30"
+  checkpoint_interval_seconds: 300
+  latency_thresholds:
+    features: 12.0
+    ml: 20.0
+    risk: 8.0
+  latency_violation_limit: 3
 environment: development
 logging:
   level: INFO

@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from ..config.base import RiskLimits
 from ..ml.engine import MLSignal
@@ -42,6 +42,7 @@ class RiskEngine:
         self._halt_trading = False
         self._calibration_required = False
         self._calibration_expiry: Optional[datetime] = None
+        self._emergency_reason: Optional[str] = None
 
     def evaluate_signal(self, signal: MLSignal, price: float) -> bool:
         self._reset_if_new_day()
@@ -169,6 +170,11 @@ class RiskEngine:
             self._halt_trading = False
         self._calibration_required = False
         self._calibration_expiry = None
+        self._emergency_reason = None
+
+    def trigger_emergency_halt(self, reason: str) -> None:
+        self._halt_trading = True
+        self._emergency_reason = reason
 
     def _reset_if_new_day(self) -> None:
         now = datetime.utcnow()
@@ -198,10 +204,69 @@ class RiskEngine:
                 self._loss_cooldown_until = datetime.utcnow() + timedelta(
                     minutes=self._limits.loss_cooldown_minutes
                 )
-        else:
-            self._consecutive_losses = 0
-            if self._loss_cooldown_until and datetime.utcnow() >= self._loss_cooldown_until:
-                self._loss_cooldown_until = None
+
+    def snapshot(self) -> dict:
+        positions: List[dict] = [
+            {
+                "figi": pos.figi,
+                "quantity": pos.quantity,
+                "average_price": pos.average_price,
+            }
+            for pos in self._positions.values()
+        ]
+        payload = {
+            "positions": positions,
+            "realized_pnl": self._realized_pnl,
+            "consecutive_losses": self._consecutive_losses,
+            "loss_cooldown_until": self._loss_cooldown_until.isoformat()
+            if self._loss_cooldown_until
+            else None,
+            "daily_loss_triggered": self._daily_loss_triggered,
+            "halt_trading": self._halt_trading,
+            "order_count": self._order_count,
+            "last_reset": self._last_reset.isoformat(),
+            "session_start": self._session_start.isoformat(),
+            "emergency_reason": self._emergency_reason,
+            "calibration_required": self._calibration_required,
+            "calibration_expiry": self._calibration_expiry.isoformat()
+            if self._calibration_expiry
+            else None,
+        }
+        return payload
+
+    def restore(self, payload: dict) -> None:
+        self._positions.clear()
+        for item in payload.get("positions", []):
+            try:
+                figi = item["figi"]
+                qty = int(item.get("quantity", 0))
+                price = float(item.get("average_price", 0.0))
+            except (KeyError, TypeError, ValueError):
+                continue
+            self._positions[figi] = Position(figi=figi, quantity=qty, average_price=price)
+        self._realized_pnl = float(payload.get("realized_pnl", 0.0))
+        self._consecutive_losses = int(payload.get("consecutive_losses", 0))
+        loss_until = payload.get("loss_cooldown_until")
+        self._loss_cooldown_until = (
+            datetime.fromisoformat(loss_until) if isinstance(loss_until, str) else None
+        )
+        self._daily_loss_triggered = bool(payload.get("daily_loss_triggered", False))
+        self._halt_trading = bool(payload.get("halt_trading", False))
+        self._order_count = int(payload.get("order_count", 0))
+        last_reset = payload.get("last_reset")
+        if isinstance(last_reset, str):
+            self._last_reset = datetime.fromisoformat(last_reset)
+        session_start = payload.get("session_start")
+        if isinstance(session_start, str):
+            self._session_start = datetime.fromisoformat(session_start)
+        self._emergency_reason = payload.get("emergency_reason")
+        self._calibration_required = bool(payload.get("calibration_required", False))
+        calibration_expiry = payload.get("calibration_expiry")
+        self._calibration_expiry = (
+            datetime.fromisoformat(calibration_expiry)
+            if isinstance(calibration_expiry, str)
+            else None
+        )
 
 
 __all__ = ["RiskEngine", "RiskMetrics", "Position"]

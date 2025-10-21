@@ -32,8 +32,10 @@ class ExecutionEngine:
         self._broker_factory = broker_factory
         self._risk_engine = risk_engine
 
-    async def execute_signal(self, signal: MLSignal, price: float) -> ExecutionReport:
-        if not self._risk_engine.evaluate_signal(signal, price):
+    async def execute_signal(
+        self, signal: MLSignal, price: float, *, skip_risk: bool = False
+    ) -> ExecutionReport:
+        if not skip_risk and not self._risk_engine.evaluate_signal(signal, price):
             return ExecutionReport(figi=signal.figi, accepted=False, reason="Risk check failed")
         direction = OrderDirection.ORDER_DIRECTION_BUY if signal.direction > 0 else OrderDirection.ORDER_DIRECTION_SELL
         order = OrderRequest(

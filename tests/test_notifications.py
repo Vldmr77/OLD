@@ -65,3 +65,33 @@ def test_low_liquidity_notification_uses_low_frequency():
 
     assert sent is False  # telegram not configured
     assert sounds[0][0] == dispatcher.config.low_liquidity_frequency_hz
+
+
+def test_latency_notification_bypasses_cooldown_for_critical():
+    calls: list[bytes] = []
+
+    def fake_http(url: str, data: bytes) -> None:
+        calls.append(data)
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            cooldown_seconds=60,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    asyncio.run(
+        dispatcher.notify_latency_violation(
+            "ml", latency_ms=25.0, threshold_ms=20.0, severity="critical"
+        )
+    )
+    asyncio.run(
+        dispatcher.notify_latency_violation(
+            "ml", latency_ms=26.0, threshold_ms=20.0, severity="critical"
+        )
+    )
+
+    assert len(calls) == 2
