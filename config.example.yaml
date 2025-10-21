@@ -28,6 +28,9 @@ ml:
     svm_volatility: 0.15
 risk:
   max_position: 50
+  max_daily_loss: 10000.0
+  max_consecutive_losses: 3
+  loss_cooldown_minutes: 15
 execution:
   account_id: ""
 storage:

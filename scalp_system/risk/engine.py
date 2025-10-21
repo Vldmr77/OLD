@@ -32,13 +32,30 @@ class RiskEngine:
         self._positions: Dict[str, Position] = {}
         self._order_count: int = 0
         self._last_reset = datetime.utcnow()
+        self._session_start = datetime.utcnow()
+        self._realized_pnl: float = 0.0
+        self._consecutive_losses: int = 0
+        self._loss_cooldown_until: Optional[datetime] = None
+        self._daily_loss_triggered = False
+        self._halt_due_to_drift = False
         self._last_drift: Optional[DriftReport] = None
         self._halt_trading = False
         self._calibration_required = False
         self._calibration_expiry: Optional[datetime] = None
 
     def evaluate_signal(self, signal: MLSignal, price: float) -> bool:
+        self._reset_if_new_day()
+        if self._loss_cooldown_until and datetime.utcnow() >= self._loss_cooldown_until:
+            self._loss_cooldown_until = None
         if self._halt_trading:
+            return False
+        if self._loss_cooldown_until and datetime.utcnow() < self._loss_cooldown_until:
+            return False
+        if (
+            self._limits.max_daily_loss > 0
+            and self._daily_loss_triggered
+            and self._realized_pnl <= -self._limits.max_daily_loss
+        ):
             return False
         position = self._positions.get(signal.figi, Position(figi=signal.figi))
         projected_qty = position.quantity + signal.direction
@@ -52,6 +69,7 @@ class RiskEngine:
         return True
 
     def register_order(self) -> None:
+        self._reset_if_new_day()
         now = datetime.utcnow()
         if (now - self._last_reset).total_seconds() > 60:
             self._order_count = 0
@@ -59,14 +77,38 @@ class RiskEngine:
         self._order_count += 1
 
     def update_position(self, figi: str, quantity_delta: int, price: float) -> None:
+        self._reset_if_new_day()
         position = self._positions.setdefault(figi, Position(figi=figi))
-        new_qty = position.quantity + quantity_delta
+        prev_qty = position.quantity
+        prev_avg = position.average_price
+        if prev_qty != 0 and quantity_delta != 0 and prev_qty * quantity_delta < 0:
+            closed_qty = min(abs(prev_qty), abs(quantity_delta))
+            sign = 1 if prev_qty > 0 else -1
+            realized = (price - prev_avg) * closed_qty * sign
+            self._update_loss_state(realized)
+            remaining = prev_qty + quantity_delta
+            if remaining == 0:
+                position.quantity = 0
+                position.average_price = 0.0
+                return
+            if prev_qty * remaining > 0:
+                position.quantity = remaining
+                position.average_price = prev_avg
+                return
+            quantity_delta = remaining
+            prev_qty = 0
+            prev_avg = 0.0
+
+        new_qty = prev_qty + quantity_delta
         if new_qty == 0:
             position.quantity = 0
             position.average_price = 0.0
+        elif prev_qty == 0:
+            position.quantity = new_qty
+            position.average_price = price
         else:
             position.average_price = (
-                (position.average_price * position.quantity + price * quantity_delta) / new_qty
+                (prev_avg * prev_qty + price * quantity_delta) / new_qty
             )
             position.quantity = new_qty
 
@@ -95,6 +137,7 @@ class RiskEngine:
         self._last_drift = report
         if report.alert:
             self._halt_trading = True
+            self._halt_due_to_drift = True
         elif report.calibrate:
             self._calibration_required = True
             self._calibration_expiry = datetime.utcnow() + timedelta(minutes=15)
@@ -121,9 +164,44 @@ class RiskEngine:
     def notify_model_reload(self) -> None:
         """Resume trading safeguards after successful model reload."""
 
-        self._halt_trading = False
+        self._halt_due_to_drift = False
+        if not self._daily_loss_triggered:
+            self._halt_trading = False
         self._calibration_required = False
         self._calibration_expiry = None
+
+    def _reset_if_new_day(self) -> None:
+        now = datetime.utcnow()
+        if now.date() != self._session_start.date():
+            self._session_start = now
+            self._order_count = 0
+            self._last_reset = now
+            self._realized_pnl = 0.0
+            self._consecutive_losses = 0
+            self._loss_cooldown_until = None
+            self._daily_loss_triggered = False
+            if not self._halt_due_to_drift:
+                self._halt_trading = False
+
+    def _update_loss_state(self, realized: float) -> None:
+        self._realized_pnl += realized
+        if self._limits.max_daily_loss > 0 and self._realized_pnl <= -self._limits.max_daily_loss:
+            self._daily_loss_triggered = True
+            self._halt_trading = True
+        if realized < 0:
+            self._consecutive_losses += 1
+            if (
+                self._limits.max_consecutive_losses > 0
+                and self._consecutive_losses >= self._limits.max_consecutive_losses
+                and self._limits.loss_cooldown_minutes > 0
+            ):
+                self._loss_cooldown_until = datetime.utcnow() + timedelta(
+                    minutes=self._limits.loss_cooldown_minutes
+                )
+        else:
+            self._consecutive_losses = 0
+            if self._loss_cooldown_until and datetime.utcnow() >= self._loss_cooldown_until:
+                self._loss_cooldown_until = None
 
 
 __all__ = ["RiskEngine", "RiskMetrics", "Position"]

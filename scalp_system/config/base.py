@@ -76,6 +76,8 @@ class RiskLimits:
     max_order_rate_per_minute: int = 120
     var_horizon_minutes: int = 30
     max_gross_exposure: float = 500000.0
+    loss_cooldown_minutes: int = 15
+    max_consecutive_losses: int = 3
 
 
 @dataclass
