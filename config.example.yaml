@@ -61,6 +61,9 @@ monitoring:
   memory_soft_limit: 85.0
   gpu_soft_limit: 90.0
   audit_log_filename: audit.log
+  heartbeat_enabled: true
+  heartbeat_interval_seconds: 5.0
+  heartbeat_miss_threshold: 3
 security:
   encryption_key_path: ./runtime/secret.key
 notifications:

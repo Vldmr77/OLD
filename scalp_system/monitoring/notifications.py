@@ -168,6 +168,26 @@ class NotificationDispatcher:
             cooldown_override=0,
         )
 
+    async def notify_heartbeat_missed(
+        self,
+        missed_intervals: int,
+        last_seen: Optional[datetime],
+        reason: Optional[str],
+    ) -> bool:
+        last_repr = last_seen.isoformat() if last_seen else "unknown"
+        suffix = f" reason={reason}" if reason else ""
+        message = (
+            "HEARTBEAT_MISSED "
+            f"intervals={missed_intervals} last_seen={last_repr}{suffix}"
+        )
+        return await self._dispatch(
+            key="heartbeat",
+            message=message,
+            beep_frequency=self.config.high_risk_frequency_hz,
+            beep_duration=0.5,
+            cooldown_override=0,
+        )
+
     async def _dispatch(
         self,
         *,

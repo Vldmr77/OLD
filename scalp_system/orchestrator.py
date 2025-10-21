@@ -24,6 +24,7 @@ from .monitoring.audit import AuditLogger
 from .monitoring.drift import DriftDetector
 from .monitoring.latency import LatencyAlert, LatencyMonitor
 from .monitoring.metrics import MetricsRegistry
+from .monitoring.heartbeat import HeartbeatMonitor, HeartbeatStatus
 from .monitoring.notifications import NotificationDispatcher
 from .monitoring.reporting import PerformanceReporter
 from .monitoring.resource import ResourceMonitor
@@ -78,6 +79,11 @@ class Orchestrator:
             gpu_threshold=config.monitoring.gpu_soft_limit,
         )
         self._notifications = NotificationDispatcher(config.notifications)
+        self._heartbeat = HeartbeatMonitor(
+            enabled=config.monitoring.heartbeat_enabled,
+            interval_seconds=config.monitoring.heartbeat_interval_seconds,
+            miss_threshold=config.monitoring.heartbeat_miss_threshold,
+        )
         self._connectivity = ConnectivityFailover(config.connectivity)
         self._latency_monitor = LatencyMonitor(
             config.system.latency_thresholds,
@@ -88,6 +94,7 @@ class Orchestrator:
             config.storage.base_path / "checkpoint.json"
         )
         self._checkpoint_task: Optional[asyncio.Task] = None
+        self._heartbeat_task: Optional[asyncio.Task] = None
         self._disaster_recovery = DisasterRecoveryManager(
             config.storage.base_path,
             config.disaster_recovery,
@@ -239,6 +246,29 @@ class Orchestrator:
                 alert.severity,
             )
 
+    async def _handle_heartbeat_timeout(self, status: HeartbeatStatus) -> None:
+        reason = status.last_failure_reason or "no data"
+        last_seen = status.last_beat.isoformat() if status.last_beat else "unknown"
+        context = status.last_context or "unknown"
+        LOGGER.error(
+            "Heartbeat missed intervals=%s elapsed=%.2fs context=%s reason=%s",
+            status.missed_intervals,
+            status.elapsed_seconds,
+            context,
+            reason,
+        )
+        self._audit_logger.log(
+            "NETWORK",
+            "HEARTBEAT_MISSED",
+            f"misses={status.missed_intervals};last={last_seen};context={context};reason={reason}",
+        )
+        self._risk_engine.trigger_emergency_halt("heartbeat")
+        await self._notifications.notify_heartbeat_missed(
+            status.missed_intervals,
+            status.last_beat,
+            reason,
+        )
+
     async def _process_manual_override(self) -> bool:
         status = self._manual_override.status()
         if status.halted:
@@ -264,6 +294,7 @@ class Orchestrator:
         self._audit_logger.log(
             "NETWORK", "STREAM_ERROR", f"channel={self._connectivity.active_channel};reason={reason}"
         )
+        self._heartbeat.record_failure(reason)
         event, delay = self._connectivity.record_failure(reason)
         if event and event.kind == "failover":
             LOGGER.error(
@@ -282,6 +313,14 @@ class Orchestrator:
         interval = int(self._config.system.checkpoint_interval_seconds)
         if interval > 0:
             self._checkpoint_task = asyncio.create_task(self._checkpoint_loop(interval))
+        if self._heartbeat.enabled:
+            poll = max(self._config.monitoring.heartbeat_interval_seconds / 2, 0.5)
+            self._heartbeat_task = asyncio.create_task(
+                self._heartbeat.monitor(
+                    self._handle_heartbeat_timeout,
+                    poll_interval=poll,
+                )
+            )
         stream_factory = self._market_stream_factory()
         broker_factory = self._broker_factory()
         rotation_counter = 0
@@ -319,6 +358,7 @@ class Orchestrator:
                     )
                     self._audit_logger.log("RESOURCE", action.upper(), detail)
                 self._data_engine.ingest_order_book(order_book)
+                self._heartbeat.record_beat(order_book.figi)
                 recovery = self._connectivity.record_success()
                 if recovery and recovery.kind == "recovery":
                     LOGGER.info("Connectivity restored on %s", recovery.channel)
@@ -439,6 +479,10 @@ class Orchestrator:
                 self._checkpoint_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._checkpoint_task
+            if self._heartbeat_task:
+                self._heartbeat_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._heartbeat_task
             await self._process_latency_alerts()
             await self._persist_checkpoint()
             await self._performance_reporter.maybe_emit()

@@ -264,3 +264,29 @@ def test_gpu_failover_notification_formats_message():
     assert "GPU_FAILOVER" in payload["text"][0]
     assert "mode=cpu" in payload["text"][0]
     assert sounds[0][0] == dispatcher.config.high_risk_frequency_hz
+
+
+def test_heartbeat_missed_notification_contains_reason():
+    captured = {}
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            enable_sound_alerts=False,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    last_seen = datetime(2024, 1, 1, 0, 0, 0)
+    asyncio.run(dispatcher.notify_heartbeat_missed(3, last_seen, "timeout"))
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    text = payload["text"][0]
+    assert "HEARTBEAT_MISSED" in text
+    assert "intervals=3" in text
+    assert "reason=timeout" in text

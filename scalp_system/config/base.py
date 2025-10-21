@@ -114,6 +114,14 @@ class MonitoringConfig:
     memory_soft_limit: float = 90.0
     gpu_soft_limit: float = 90.0
     audit_log_filename: str = "audit.log"
+    heartbeat_enabled: bool = True
+    heartbeat_interval_seconds: float = 5.0
+    heartbeat_miss_threshold: int = 3
+
+    def ensure(self) -> None:
+        if self.heartbeat_interval_seconds <= 0:
+            self.heartbeat_interval_seconds = 5.0
+        self.heartbeat_miss_threshold = max(1, int(self.heartbeat_miss_threshold))
 
 
 @dataclass
@@ -311,6 +319,7 @@ class OrchestratorConfig:
         self.reporting.ensure()
         self.manual_override.ensure()
         self.connectivity.ensure()
+        self.monitoring.ensure()
         self.disaster_recovery.ensure()
 
     @classmethod
@@ -345,7 +354,19 @@ class OrchestratorConfig:
             risk=RiskLimits(**_ensure_dict(data.get("risk", {}))),
             execution=ExecutionConfig(**_ensure_dict(data.get("execution", {}))),
             storage=StorageConfig(**_ensure_dict(data.get("storage", {}))),
-            monitoring=MonitoringConfig(**monitoring_data),
+            monitoring=MonitoringConfig(
+                cpu_soft_limit=monitoring_data.get("cpu_soft_limit", 90.0),
+                memory_soft_limit=monitoring_data.get("memory_soft_limit", 90.0),
+                gpu_soft_limit=monitoring_data.get("gpu_soft_limit", 90.0),
+                audit_log_filename=monitoring_data.get("audit_log_filename", "audit.log"),
+                heartbeat_enabled=monitoring_data.get("heartbeat_enabled", True),
+                heartbeat_interval_seconds=monitoring_data.get(
+                    "heartbeat_interval_seconds", 5.0
+                ),
+                heartbeat_miss_threshold=monitoring_data.get(
+                    "heartbeat_miss_threshold", 3
+                ),
+            ),
             security=SecurityConfig(
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
             ),
