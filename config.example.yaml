@@ -69,6 +69,11 @@ notifications:
   enable_sound_alerts: false
   liquidity_spread_threshold_bps: 5.0
   cooldown_seconds: 30
+manual_override:
+  enabled: false
+  flag_path: ./runtime/manual_override.flag
+  poll_interval_seconds: 1.0
+  auto_resume_minutes: null
 reporting:
   enabled: true
   interval_minutes: 60

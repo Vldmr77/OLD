@@ -133,6 +133,28 @@ class NotificationConfig:
 
 
 @dataclass
+class ManualOverrideConfig:
+    enabled: bool = False
+    flag_path: Path = Path("./runtime/manual_override.flag")
+    poll_interval_seconds: float = 1.0
+    auto_resume_minutes: Optional[int] = None
+
+    def ensure(self) -> None:
+        if not isinstance(self.flag_path, Path):
+            self.flag_path = Path(self.flag_path).expanduser()
+        self.flag_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.poll_interval_seconds <= 0:
+            self.poll_interval_seconds = 1.0
+        if self.auto_resume_minutes is not None:
+            try:
+                self.auto_resume_minutes = int(self.auto_resume_minutes)
+            except (TypeError, ValueError):
+                self.auto_resume_minutes = None
+            if self.auto_resume_minutes is not None and self.auto_resume_minutes <= 0:
+                self.auto_resume_minutes = None
+
+
+@dataclass
 class DisasterRecoveryConfig:
     enabled: bool = False
     replication_path: Path = Path("./runtime/backups")
@@ -252,6 +274,7 @@ class OrchestratorConfig:
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
+    manual_override: ManualOverrideConfig = field(default_factory=ManualOverrideConfig)
     reporting: ReportingConfig = field(default_factory=ReportingConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
@@ -267,6 +290,7 @@ class OrchestratorConfig:
         self.backtest.ensure()
         self.system.ensure()
         self.reporting.ensure()
+        self.manual_override.ensure()
         self.disaster_recovery.ensure()
 
     @classmethod
@@ -274,6 +298,7 @@ class OrchestratorConfig:
         monitoring_data = _ensure_dict(data.get("monitoring", {}))
         security_data = _ensure_dict(data.get("security", {}))
         notifications_data = _ensure_dict(data.get("notifications", {}))
+        manual_override_data = _ensure_dict(data.get("manual_override", {}))
         training_data = _ensure_dict(data.get("training", {}))
         backtest_data = _ensure_dict(data.get("backtest", {}))
         system_data = _ensure_dict(data.get("system", {}))
@@ -304,6 +329,18 @@ class OrchestratorConfig:
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
             ),
             notifications=NotificationConfig(**notifications_data),
+            manual_override=ManualOverrideConfig(
+                enabled=manual_override_data.get("enabled", False),
+                flag_path=_to_path(
+                    manual_override_data.get(
+                        "flag_path", Path("./runtime/manual_override.flag")
+                    )
+                ),
+                poll_interval_seconds=float(
+                    manual_override_data.get("poll_interval_seconds", 1.0)
+                ),
+                auto_resume_minutes=manual_override_data.get("auto_resume_minutes"),
+            ),
             reporting=ReportingConfig(
                 enabled=reporting_data.get("enabled", True),
                 interval_minutes=reporting_data.get("interval_minutes", 60),
@@ -394,6 +431,7 @@ __all__ = [
     "MonitoringConfig",
     "NotificationConfig",
     "SecurityConfig",
+    "ManualOverrideConfig",
     "SystemConfig",
     "ReportingConfig",
     "TrainingConfig",

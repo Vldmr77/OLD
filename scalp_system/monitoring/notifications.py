@@ -119,6 +119,27 @@ class NotificationDispatcher:
             cooldown_override=0,
         )
 
+    async def notify_manual_override(
+        self, reason: str, expires_at: Optional[datetime]
+    ) -> bool:
+        expiry = f" until={expires_at.isoformat()}" if expires_at else ""
+        message = f"MANUAL_OVERRIDE active reason={reason}{expiry}".strip()
+        return await self._dispatch(
+            key="manual_override",
+            message=message,
+            beep_frequency=self.config.high_risk_frequency_hz,
+            beep_duration=0.4,
+            cooldown_override=0,
+        )
+
+    async def notify_manual_override_cleared(self) -> bool:
+        message = "MANUAL_OVERRIDE cleared"
+        return await self._dispatch(
+            key="manual_override",
+            message=message,
+            cooldown_override=0,
+        )
+
     async def _dispatch(
         self,
         *,

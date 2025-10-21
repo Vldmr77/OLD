@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from urllib.parse import parse_qs
 
+from datetime import datetime
+
 from scalp_system.config.base import NotificationConfig
 from scalp_system.monitoring.notifications import NotificationDispatcher
 
@@ -150,3 +152,52 @@ def test_backup_notification_includes_path(tmp_path: Path):
     payload = parse_qs(captured["data"].decode("utf-8"))
     assert "BACKUP_CREATED" in payload["text"][0]
     assert str(snapshot) in payload["text"][0]
+
+
+def test_manual_override_notification_formats_expiry():
+    captured = {}
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            enable_sound_alerts=False,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    expiry = datetime(2024, 1, 1, 0, 0, 0)
+    asyncio.run(dispatcher.notify_manual_override("maintenance", expiry))
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    assert "MANUAL_OVERRIDE" in payload["text"][0]
+    assert "maintenance" in payload["text"][0]
+    assert "until=" in payload["text"][0]
+
+
+def test_manual_override_cleared_reuses_key_without_cooldown():
+    captured: list[bytes] = []
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured.append(data)
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            cooldown_seconds=60,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    asyncio.run(dispatcher.notify_manual_override("halt", None))
+    asyncio.run(dispatcher.notify_manual_override_cleared())
+
+    assert len(captured) == 2
+    payload = parse_qs(captured[-1].decode("utf-8"))
+    assert "cleared" in payload["text"][0]

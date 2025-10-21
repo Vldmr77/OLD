@@ -12,6 +12,7 @@ from typing import Callable, Deque, Optional
 
 from .config.base import OrchestratorConfig
 from .config.loader import load_config
+from .control.manual_override import ManualOverrideGuard
 from .data.engine import DataEngine
 from .data.streams import MarketDataStream, iterate_stream
 from .execution.client import BrokerClient
@@ -90,6 +91,9 @@ class Orchestrator:
             config.disaster_recovery,
             notifications=self._notifications,
         )
+        self._manual_override = ManualOverrideGuard(config.manual_override)
+        self._manual_override_active = False
+        self._manual_override_reason: Optional[str] = None
         self._key_manager: Optional[KeyManager] = None
         key_path = config.security.encryption_key_path
         env_key = os.getenv("SCALP_ENCRYPTION_KEY")
@@ -232,6 +236,26 @@ class Orchestrator:
                 alert.severity,
             )
 
+    async def _process_manual_override(self) -> bool:
+        status = self._manual_override.status()
+        if status.halted:
+            reason = status.reason or "manual override"
+            if not self._manual_override_active or reason != self._manual_override_reason:
+                LOGGER.warning("Manual override active: %s", reason)
+                self._audit_logger.log("CONTROL", "HALTED", reason)
+                await self._notifications.notify_manual_override(reason, status.expires_at)
+            self._manual_override_active = True
+            self._manual_override_reason = reason
+            await asyncio.sleep(self._manual_override.poll_interval)
+            return True
+        if self._manual_override_active:
+            LOGGER.info("Manual override cleared")
+            self._audit_logger.log("CONTROL", "RESUMED", "manual override cleared")
+            await self._notifications.notify_manual_override_cleared()
+        self._manual_override_active = False
+        self._manual_override_reason = None
+        return False
+
     async def run(self) -> None:
         await self._await_startup_window()
         interval = int(self._config.system.checkpoint_interval_seconds)
@@ -255,10 +279,12 @@ class Orchestrator:
                     LOGGER.warning(
                         "Resource pressure detected cpu=%.1f mem=%.1f gpu=%s actions=%s",
                         snapshot.cpu_percent,
-                    snapshot.memory_percent,
-                    f"{snapshot.gpu_memory_percent:.1f}" if snapshot.gpu_memory_percent is not None else "n/a",
-                    mitigations,
-                )
+                        snapshot.memory_percent,
+                        f"{snapshot.gpu_memory_percent:.1f}"
+                        if snapshot.gpu_memory_percent is not None
+                        else "n/a",
+                        mitigations,
+                    )
                 gpu_repr = (
                     f"{snapshot.gpu_memory_percent:.1f}"
                     if snapshot.gpu_memory_percent is not None
@@ -270,9 +296,11 @@ class Orchestrator:
                         f"mem={snapshot.memory_percent:.1f};gpu={gpu_repr}"
                     )
                     self._audit_logger.log("RESOURCE", action.upper(), detail)
-            self._data_engine.ingest_order_book(order_book)
-            mid_price = order_book.mid_price()
-            spread = order_book.spread()
+                self._data_engine.ingest_order_book(order_book)
+                if await self._process_manual_override():
+                    continue
+                mid_price = order_book.mid_price()
+                spread = order_book.spread()
             if mid_price > 0:
                 spread_bps = (spread / mid_price) * 10_000
                 if (
