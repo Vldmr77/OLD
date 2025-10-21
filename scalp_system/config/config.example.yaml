@@ -23,7 +23,7 @@ environment: development
 logging:
   level: INFO
 datafeed:
-  sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
+  sandbox_token: "t.baeBGxS1nYnaHLZ7tC328DzwPNpTQwDq70GZ8YSp3Q1Ek0N4g2Htzv3hBzbQIrsdcu70xICbCgDIq_19SWEppA"
   use_sandbox: true
   instruments:
     - BBG004730ZJ9
