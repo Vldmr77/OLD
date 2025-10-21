@@ -43,6 +43,13 @@ python -m scalp_system  # использует пакетный config.example.y
 python launch_scalp_system.py ./my_config.yaml
 ```
 
+Для запуска UI через тот же ярлык достаточно добавить флаг `--dashboard`.
+Оставшиеся аргументы (после `--`) передаются в `python -m scalp_system.cli.dashboard`:
+
+```bash
+python launch_scalp_system.py --dashboard -- --host 0.0.0.0 --port 8000
+```
+
 При отсутствии поддержки YAML можно использовать JSON-конфигурацию (`config.json`).
 Конфигурация по умолчанию лежит в `scalp_system/config/config.example.yaml` и
 используется всеми CLI инструментами, если не указать иной путь.

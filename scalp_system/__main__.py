@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import Sequence
 
 try:  # pragma: no cover - guard for script execution
     from scalp_system.config import DEFAULT_CONFIG_PATH
@@ -19,7 +20,7 @@ except ModuleNotFoundError:  # running as `python scalp_system/__main__.py`
     from scalp_system.orchestrator import run_from_yaml
 
 
-def main() -> None:
+def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Scalping system orchestrator")
     parser.add_argument(
         "config",
@@ -28,7 +29,7 @@ def main() -> None:
         default=DEFAULT_CONFIG_PATH,
         help="Path to YAML configuration (defaults to packaged example)",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     config_path = ensure_tokens_present(args.config)
     run_from_yaml(config_path)
 
