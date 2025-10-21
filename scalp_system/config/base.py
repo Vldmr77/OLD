@@ -109,6 +109,20 @@ class SecurityConfig:
 
 
 @dataclass
+class TrainingConfig:
+    dataset_path: Path = Path("./data/training.jsonl")
+    output_dir: Path = Path("./models")
+    epochs: int = 5
+    learning_rate: float = 0.01
+    validation_split: float = 0.2
+    min_samples: int = 10
+
+    def ensure(self) -> None:
+        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.dataset_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
 class OrchestratorConfig:
     environment: str = "development"
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -120,10 +134,12 @@ class OrchestratorConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
 
     def __post_init__(self) -> None:
         self.storage.ensure()
         self.ml.weights.normalise()
+        self.training.ensure()
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
@@ -147,6 +163,18 @@ class OrchestratorConfig:
             monitoring=MonitoringConfig(**monitoring_data),
             security=SecurityConfig(
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
+            ),
+            training=TrainingConfig(
+                dataset_path=_to_path(
+                    _ensure_dict(data.get("training", {})).get("dataset_path", Path("./data/training.jsonl"))
+                ),
+                output_dir=_to_path(
+                    _ensure_dict(data.get("training", {})).get("output_dir", Path("./models"))
+                ),
+                epochs=_ensure_dict(data.get("training", {})).get("epochs", 5),
+                learning_rate=_ensure_dict(data.get("training", {})).get("learning_rate", 0.01),
+                validation_split=_ensure_dict(data.get("training", {})).get("validation_split", 0.2),
+                min_samples=_ensure_dict(data.get("training", {})).get("min_samples", 10),
             ),
         )
 
@@ -192,5 +220,6 @@ __all__ = [
     "StorageConfig",
     "MonitoringConfig",
     "SecurityConfig",
+    "TrainingConfig",
     "OrchestratorConfig",
 ]
