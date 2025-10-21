@@ -46,14 +46,20 @@ class FeatureModel(ABC):
 
 class WeightedEnsemble:
     def __init__(self, weights: dict[str, float]) -> None:
-        self._weights = weights
+        self._weights = dict(weights)
 
-    def combine(self, predictions: dict[str, ModelPrediction]) -> ModelPrediction:
+    def set_weights(self, weights: dict[str, float]) -> None:
+        self._weights = dict(weights)
+
+    def combine(
+        self, predictions: dict[str, ModelPrediction], weights: Optional[dict[str, float]] = None
+    ) -> ModelPrediction:
+        active_weights = weights or self._weights
         score = 0.0
         confidence = 0.0
         weight_sum = 0.0
         for name, pred in predictions.items():
-            weight = self._weights.get(name, 0.0)
+            weight = active_weights.get(name, 0.0)
             score += weight * pred.score
             confidence += weight * pred.confidence
             weight_sum += weight

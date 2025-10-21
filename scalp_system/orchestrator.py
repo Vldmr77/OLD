@@ -6,10 +6,11 @@ import logging
 import os
 from collections import deque
 from contextlib import suppress
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Deque, Optional
 
+from .broker.tinkoff import TinkoffAPI
 from .config.base import OrchestratorConfig
 from .config.loader import load_config
 from .control.manual_override import ManualOverrideGuard
@@ -22,6 +23,7 @@ from .features.pipeline import FeaturePipeline
 from .ml.engine import MLSignal, MLEngine
 from .ml.fallback import FallbackSignalGenerator
 from .ml.calibration import CalibrationCoordinator
+from .ml.training import ModelTrainer
 from .monitoring.audit import AuditLogger
 from .monitoring.drift import DriftDetector
 from .monitoring.latency import LatencyAlert, LatencyMonitor
@@ -66,9 +68,15 @@ class Orchestrator:
             monitored_instruments=config.datafeed.monitored_instruments,
             soft_rss_limit_mb=config.datafeed.soft_rss_limit_mb,
             hard_rss_limit_mb=config.datafeed.hard_rss_limit_mb,
+            max_active_instruments=config.datafeed.max_active_instruments,
+            monitor_pool_size=config.datafeed.monitor_pool_size,
+            trade_history_size=config.datafeed.trade_history_size,
+            candle_history_size=config.datafeed.candle_history_size,
         )
-        self._data_engine.update_active_instruments(config.datafeed.instruments)
-        self._data_engine.update_monitored_pool(config.datafeed.monitored_instruments)
+        self._data_engine.seed_instruments(
+            config.datafeed.instruments, config.datafeed.monitored_instruments
+        )
+        self._ml_engine.set_instrument_classes(config.datafeed.instrument_classes)
         self._calibration = CalibrationCoordinator(
             queue_path=config.storage.base_path / "calibration_queue.jsonl"
         )
@@ -118,6 +126,18 @@ class Orchestrator:
         except ValueError:
             LOGGER.exception("Failed to load encryption key")
             self._key_manager = None
+        self._api_token = self._resolve_api_token()
+        self._rest_api: Optional[TinkoffAPI] = None
+        if self._api_token:
+            self._rest_api = TinkoffAPI(
+                token=self._api_token,
+                use_sandbox=self._config.datafeed.use_sandbox,
+                account_id=self._config.execution.account_id,
+            )
+        self._broker_factory_fn = self._broker_factory()
+        self._execution_engine = ExecutionEngine(
+            self._broker_factory_fn, self._risk_engine, mode=self._config.system.mode
+        )
         self._restore_from_checkpoint()
         self._performance_reporter = PerformanceReporter(
             repository=self._repository,
@@ -128,39 +148,41 @@ class Orchestrator:
             enabled=config.reporting.enabled,
             notifications=self._notifications,
         )
+        self._training_task: Optional[asyncio.Task] = None
 
-    def _market_stream_factory(self) -> Callable[[], MarketDataStream]:
+    def _resolve_api_token(self) -> Optional[str]:
         token = (
             self._config.datafeed.sandbox_token
             if self._config.datafeed.use_sandbox
             else self._config.datafeed.production_token
         )
-        token = self._decrypt_token(token)
-        if not token:
+        return self._decrypt_token(token)
+
+    def _market_stream_factory(self) -> Callable[[], MarketDataStream]:
+        if not self._api_token:
             raise RuntimeError("API token is required")
 
         def factory() -> MarketDataStream:
             return MarketDataStream(
-                token=token,
+                token=self._api_token,
                 use_sandbox=self._config.datafeed.use_sandbox,
-                instruments=self._config.datafeed.instruments,
+                instruments=self._data_engine.active_instruments(),
                 depth=self._config.datafeed.depth,
             )
 
         return factory
 
-    def _broker_factory(self):
-        token = (
-            self._config.datafeed.sandbox_token
-            if self._config.datafeed.use_sandbox
-            else self._config.datafeed.production_token
-        )
-        token = self._decrypt_token(token)
-        if not token:
+    def _broker_factory(self) -> Callable[[], BrokerClient]:
+        if not self._api_token:
             raise RuntimeError("Broker token is required")
 
         def factory() -> BrokerClient:
-            return BrokerClient(token, sandbox=self._config.datafeed.use_sandbox, account_id=self._config.execution.account_id)
+            return BrokerClient(
+                self._api_token,
+                sandbox=self._config.datafeed.use_sandbox,
+                account_id=self._config.execution.account_id,
+                orders_per_minute=self._config.risk.max_order_rate_per_minute,
+            )
 
         return factory
 
@@ -187,6 +209,113 @@ class Orchestrator:
         if isinstance(risk_state, dict):
             self._risk_engine.restore(risk_state)
             LOGGER.info("Restored risk engine state from checkpoint")
+
+    async def _prepare_initial_state(self) -> None:
+        if not self._rest_api:
+            return
+        try:
+            await self._rest_api.ping()
+        except Exception as exc:  # pragma: no cover - network guard
+            LOGGER.warning("Initial broker API ping failed: %s", exc)
+            return
+        now = datetime.utcnow().replace(tzinfo=timezone.utc)
+        window_minutes = min(1440, max(1, self._config.datafeed.candle_history_size))
+        start = now - timedelta(minutes=window_minutes)
+        for figi in self._data_engine.active_instruments():
+            try:
+                order_book = await self._rest_api.fetch_order_book(
+                    figi, depth=self._config.datafeed.depth
+                )
+            except Exception as exc:  # pragma: no cover - network guard
+                LOGGER.warning("Failed to bootstrap order book for %s: %s", figi, exc)
+            else:
+                self._data_engine.ingest_order_book(order_book)
+            try:
+                trades = await self._rest_api.fetch_trades(
+                    figi, limit=self._config.datafeed.trade_history_size
+                )
+                self._data_engine.ingest_trades(figi, trades)
+            except Exception as exc:  # pragma: no cover - network guard
+                LOGGER.debug("Failed to fetch trades for %s: %s", figi, exc)
+            try:
+                candles = await self._rest_api.fetch_candles(
+                    figi,
+                    start,
+                    now,
+                    self._config.datafeed.candle_interval,
+                )
+                self._data_engine.ingest_candles(figi, candles)
+            except Exception as exc:  # pragma: no cover - network guard
+                LOGGER.debug("Failed to fetch candles for %s: %s", figi, exc)
+        try:
+            portfolio = await self._rest_api.fetch_portfolio()
+        except Exception as exc:  # pragma: no cover - network guard
+            LOGGER.debug("Portfolio snapshot unavailable: %s", exc)
+            return
+        if not portfolio:
+            return
+        for position in portfolio.get("positions", []):
+            figi = position.get("figi")
+            quantity = int(position.get("quantity", 0) or 0)
+            price = float(position.get("average_price", 0.0) or 0.0)
+            if not figi or not quantity:
+                continue
+            try:
+                self._risk_engine.update_position(figi, quantity, price)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.debug("Failed to seed position for %s: %s", figi, exc)
+
+    async def _training_scheduler_loop(self) -> None:
+        schedule = self._config.training_schedule
+        while schedule.enabled:
+            now = datetime.utcnow()
+            target = self._compute_next_training_time(now)
+            await asyncio.sleep(max(1.0, (target - now).total_seconds()))
+            await self._run_scheduled_training()
+
+    def _compute_next_training_time(self, now: datetime) -> datetime:
+        schedule = self._config.training_schedule
+        hour, minute = (int(part) for part in schedule.daily_time.split(":", 1))
+        for offset in range(0, 8):
+            candidate = (
+                now + timedelta(days=offset)
+            ).replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if candidate <= now:
+                continue
+            if schedule.weekdays and candidate.weekday() not in schedule.weekdays:
+                continue
+            return candidate
+        return now + timedelta(hours=24)
+
+    async def _run_scheduled_training(self) -> None:
+        schedule = self._config.training_schedule
+        if not schedule.enabled:
+            return
+        if schedule.require_forward_window:
+            session_state = self._session_guard.evaluate()
+            if session_state.active:
+                LOGGER.info("Skipping scheduled training while session is active")
+                return
+        trainer = ModelTrainer(self._config.training)
+        try:
+            report = await asyncio.to_thread(trainer.train)
+        except Exception as exc:  # pragma: no cover - training failures
+            LOGGER.exception("Scheduled training failed: %s", exc)
+            self._audit_logger.log("TRAINING", "FAILED", str(exc))
+            return
+        self._ml_engine.update_weights(report.weights)
+        self._audit_logger.log(
+            "TRAINING",
+            "COMPLETED",
+            (
+                f"samples={report.samples};epochs={report.epochs};"
+                f"loss={report.training_loss:.4f};val={report.validation_loss:.4f}"
+            ),
+        )
+        try:
+            self.reload_models(report.output_path.parent)
+        except Exception as exc:  # pragma: no cover - reload issues
+            LOGGER.exception("Model reload after training failed: %s", exc)
 
     async def _await_startup_window(self) -> None:
         start = self._config.system.startup_time
@@ -363,8 +492,10 @@ class Orchestrator:
                     poll_interval=poll,
                 )
             )
+        if self._config.training_schedule.enabled:
+            self._training_task = asyncio.create_task(self._training_scheduler_loop())
+        await self._prepare_initial_state()
         stream_factory = self._market_stream_factory()
-        broker_factory = self._broker_factory()
         rotation_counter = 0
         async def integrity_probe() -> bool:
             return await check_data_integrity(self._data_engine)
@@ -523,9 +654,9 @@ class Orchestrator:
                             f"figi={signal.figi};confidence={signal.confidence:.3f}",
                         )
                         continue
-                    report = await ExecutionEngine(
-                        broker_factory, self._risk_engine
-                    ).execute_plan(signal, plan, mid_price)
+                    report = await self._execution_engine.execute_plan(
+                        signal, plan, mid_price
+                    )
                     if report.accepted:
                         LOGGER.info("Order executed for %s", signal.figi)
                         self._audit_logger.log(
@@ -595,6 +726,10 @@ class Orchestrator:
                 self._heartbeat_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await self._heartbeat_task
+            if self._training_task:
+                self._training_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await self._training_task
             await self._process_latency_alerts()
             await self._persist_checkpoint()
             await self._performance_reporter.maybe_emit()

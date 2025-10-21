@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterable, Optional
 
-from ..config.base import MLConfig
+from ..config.base import MLConfig, ModelWeights
 from ..features.pipeline import FeatureVector
 from .models.base import FeatureModel, ModelPrediction, WeightedEnsemble
 from .models.gbdt_features import GradientBoostedFeatureModel
@@ -42,14 +42,12 @@ class MLEngine:
             "transformer": "temporal_transformer.tflite",
             "svm_vol": "volatility_svm.tflite",
         }
-        self._ensemble = WeightedEnsemble(
-            weights={
-                "lstm_ob": config.weights.lstm_ob,
-                "gbdt_feat": config.weights.gbdt_features,
-                "transformer": config.weights.transformer_temporal,
-                "svm_vol": config.weights.svm_volatility,
-            }
-        )
+        self._base_weights = config.weights.as_dict()
+        self._ensemble = WeightedEnsemble(weights=self._base_weights)
+        self._class_weights: Dict[str, Dict[str, float]] = {
+            label: weights.as_dict() for label, weights in config.class_weights.items()
+        }
+        self._instrument_classes: Dict[str, str] = {}
         self._device_mode = "gpu"
         self._throttle_delay = 0.0
         self._pending_failover: Optional[str] = None
@@ -71,7 +69,10 @@ class MLEngine:
                 raise
         signals: list[MLSignal] = []
         for idx, vector in enumerate(batch):
-            combined = self._ensemble.combine({name: preds[idx] for name, preds in predictions.items()})
+            weights = self._weights_for_figi(vector.figi)
+            combined = self._ensemble.combine(
+                {name: preds[idx] for name, preds in predictions.items()}, weights=weights
+            )
             direction = 1 if combined.score >= 0 else -1
             signals.append(
                 MLSignal(figi=vector.figi, direction=direction, confidence=combined.confidence)
@@ -114,6 +115,23 @@ class MLEngine:
                 path = base_dir / self._model_files[name]
                 self._models[name].load(path)
                 self._models[name].reset()
+
+    def set_instrument_classes(self, mapping: Dict[str, str]) -> None:
+        self._instrument_classes = {figi: str(value).lower() for figi, value in mapping.items()}
+
+    def update_weights(self, weights: ModelWeights, *, asset_class: Optional[str] = None) -> None:
+        weights.normalise()
+        if asset_class:
+            self._class_weights[str(asset_class).lower()] = weights.as_dict()
+        else:
+            self._base_weights = weights.as_dict()
+            self._ensemble.set_weights(self._base_weights)
+
+    def _weights_for_figi(self, figi: str) -> Dict[str, float]:
+        label = self._instrument_classes.get(figi)
+        if label and label in self._class_weights:
+            return self._class_weights[label]
+        return self._base_weights
 
     def train_all_models(self, model_dir: Path) -> None:
         """Fallback training stub to rebuild placeholder TFLite models."""

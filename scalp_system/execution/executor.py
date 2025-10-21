@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional
+from typing import Literal, Optional
 
 from ..ml.engine import MLSignal
 from ..risk.engine import OrderPlan, RiskEngine
@@ -26,15 +26,25 @@ class ExecutionReport:
 
 
 class ExecutionEngine:
-    def __init__(self, broker_factory, risk_engine: RiskEngine) -> None:
-        if OrderDirection is None or OrderType is None:
-            raise RuntimeError("tinkoff-investments SDK is required for execution")
+    def __init__(self, broker_factory, risk_engine: RiskEngine, *, mode: str = "production") -> None:
         self._broker_factory = broker_factory
         self._risk_engine = risk_engine
+        self._mode: Literal["production", "forward-test", "development"] = (
+            mode if mode in {"production", "forward-test", "development"} else "production"
+        )
+        self._paper = self._mode != "production"
+        if not self._paper and (OrderDirection is None or OrderType is None):
+            raise RuntimeError("tinkoff-investments SDK is required for execution")
 
     async def execute_plan(
         self, signal: MLSignal, plan: OrderPlan, price: float
     ) -> ExecutionReport:
+        if self._paper:
+            self._risk_engine.register_order(plan.slices)
+            self._risk_engine.update_position(
+                signal.figi, signal.direction * plan.quantity, price, plan.stop_loss
+            )
+            return ExecutionReport(figi=signal.figi, accepted=True)
         direction = (
             OrderDirection.ORDER_DIRECTION_BUY
             if signal.direction > 0

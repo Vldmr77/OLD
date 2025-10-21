@@ -30,6 +30,36 @@ class DataFeedConfig:
     soft_rss_limit_mb: int = 400
     hard_rss_limit_mb: int = 700
     reconnect_delay: float = 1.0
+    max_active_instruments: int = 15
+    monitor_pool_size: int = 30
+    trade_history_size: int = 200
+    candle_history_size: int = 240
+    instrument_classes: Dict[str, str] = field(default_factory=dict)
+
+    def ensure(self) -> None:
+        self.current_cache_size = max(self.current_cache_size, self.max_active_instruments)
+        self.history_length = max(1, int(self.history_length))
+        self.max_active_instruments = max(1, int(self.max_active_instruments))
+        self.monitor_pool_size = max(
+            self.max_active_instruments, int(self.monitor_pool_size or self.max_active_instruments)
+        )
+        self.trade_history_size = max(1, int(self.trade_history_size))
+        self.candle_history_size = max(1, int(self.candle_history_size))
+        unique_monitored: list[str] = list(dict.fromkeys(self.monitored_instruments))
+        if len(unique_monitored) > self.monitor_pool_size:
+            self.monitored_instruments = unique_monitored[: self.monitor_pool_size]
+        else:
+            self.monitored_instruments = unique_monitored
+        unique_active = list(dict.fromkeys(self.instruments or []))
+        if not unique_active:
+            unique_active = unique_monitored[: self.max_active_instruments]
+        self.instruments = unique_active[: self.max_active_instruments]
+        cleaned_classes: Dict[str, str] = {}
+        for figi, value in self.instrument_classes.items():
+            if not figi:
+                continue
+            cleaned_classes[str(figi)] = str(value or "generic").lower()
+        self.instrument_classes = cleaned_classes
 
 
 @dataclass
@@ -61,6 +91,14 @@ class ModelWeights:
         self.transformer_temporal /= total
         self.svm_volatility /= total
 
+    def as_dict(self) -> Dict[str, float]:
+        return {
+            "lstm_ob": self.lstm_ob,
+            "gbdt_feat": self.gbdt_features,
+            "transformer": self.transformer_temporal,
+            "svm_vol": self.svm_volatility,
+        }
+
 
 @dataclass
 class MLConfig:
@@ -68,6 +106,24 @@ class MLConfig:
     max_latency_ms: int = 20
     weights: ModelWeights = field(default_factory=ModelWeights)
     drift_threshold: float = 0.05
+    class_weights: Dict[str, ModelWeights] = field(default_factory=dict)
+
+    def ensure(self) -> None:
+        self.weights.normalise()
+        cleaned: Dict[str, ModelWeights] = {}
+        for key, weights in self.class_weights.items():
+            if isinstance(weights, ModelWeights):
+                copy = ModelWeights(
+                    lstm_ob=weights.lstm_ob,
+                    gbdt_features=weights.gbdt_features,
+                    transformer_temporal=weights.transformer_temporal,
+                    svm_volatility=weights.svm_volatility,
+                )
+            else:
+                copy = ModelWeights(**weights)
+            copy.normalise()
+            cleaned[str(key).lower()] = copy
+        self.class_weights = cleaned
 
 
 @dataclass
@@ -304,6 +360,26 @@ class ReportingConfig:
 
 
 @dataclass
+class TrainingScheduleConfig:
+    enabled: bool = False
+    daily_time: str = "18:45"
+    weekdays: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])
+    require_forward_window: bool = True
+
+    def ensure(self) -> None:
+        self.daily_time = _validate_time(self.daily_time, default="18:45")
+        cleaned: list[int] = []
+        for value in self.weekdays:
+            try:
+                weekday = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= weekday <= 6:
+                cleaned.append(weekday)
+        self.weekdays = sorted(dict.fromkeys(cleaned or range(7)))
+
+
+@dataclass
 class TrainingConfig:
     dataset_path: Path = Path("./data/training.jsonl")
     output_dir: Path = Path("./models")
@@ -363,6 +439,7 @@ class OrchestratorConfig:
     manual_override: ManualOverrideConfig = field(default_factory=ManualOverrideConfig)
     reporting: ReportingConfig = field(default_factory=ReportingConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    training_schedule: TrainingScheduleConfig = field(default_factory=TrainingScheduleConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
     session: SessionScheduleConfig = field(default_factory=SessionScheduleConfig)
@@ -372,9 +449,11 @@ class OrchestratorConfig:
 
     def __post_init__(self) -> None:
         self.storage.ensure()
-        self.ml.weights.normalise()
+        self.datafeed.ensure()
+        self.ml.ensure()
         self.risk.ensure()
         self.training.ensure()
+        self.training_schedule.ensure()
         self.backtest.ensure()
         self.system.ensure()
         self.reporting.ensure()
@@ -394,11 +473,15 @@ class OrchestratorConfig:
         connectivity_data = _ensure_dict(data.get("connectivity", {}))
         manual_override_data = _ensure_dict(data.get("manual_override", {}))
         training_data = _ensure_dict(data.get("training", {}))
+        training_schedule_data = _ensure_dict(data.get("training_schedule", {}))
         backtest_data = _ensure_dict(data.get("backtest", {}))
         system_data = _ensure_dict(data.get("system", {}))
         reporting_data = _ensure_dict(data.get("reporting", {}))
         disaster_data = _ensure_dict(data.get("disaster_recovery", {}))
         session_data = _ensure_dict(data.get("session", {}))
+        ml_data = _ensure_dict(data.get("ml", {}))
+        weights_data = _ensure_dict(ml_data.get("weights", {}))
+        class_weights_data = ml_data.get("class_weights", {})
         encryption_value = security_data.get("encryption_key_path")
         include_patterns = disaster_data.get("include_patterns")
         if isinstance(include_patterns, list):
@@ -411,10 +494,11 @@ class OrchestratorConfig:
             datafeed=DataFeedConfig(**_ensure_dict(data.get("datafeed", {}))),
             features=FeatureConfig(**_ensure_dict(data.get("features", {}))),
             ml=MLConfig(
-                batch_size=_ensure_dict(data.get("ml", {})).get("batch_size", 64),
-                max_latency_ms=_ensure_dict(data.get("ml", {})).get("max_latency_ms", 20),
-                weights=ModelWeights(**_ensure_dict(_ensure_dict(data.get("ml", {})).get("weights", {}))),
-                drift_threshold=_ensure_dict(data.get("ml", {})).get("drift_threshold", 0.05),
+                batch_size=ml_data.get("batch_size", 64),
+                max_latency_ms=ml_data.get("max_latency_ms", 20),
+                weights=ModelWeights(**weights_data),
+                drift_threshold=ml_data.get("drift_threshold", 0.05),
+                class_weights=class_weights_data,
             ),
             risk=RiskLimits(**_ensure_dict(data.get("risk", {}))),
             execution=ExecutionConfig(**_ensure_dict(data.get("execution", {}))),
@@ -493,6 +577,7 @@ class OrchestratorConfig:
                 enable_quantization=training_data.get("enable_quantization", True),
                 quantization_int8_threshold=training_data.get("quantization_int8_threshold", 0.5),
             ),
+            training_schedule=TrainingScheduleConfig(**training_schedule_data),
             backtest=BacktestConfig(
                 dataset_path=_to_path(backtest_data.get("dataset_path", Path("./data/backtest.jsonl"))),
                 initial_capital=backtest_data.get("initial_capital", 100000.0),
@@ -575,6 +660,7 @@ __all__ = [
     "SessionScheduleConfig",
     "SystemConfig",
     "ReportingConfig",
+    "TrainingScheduleConfig",
     "TrainingConfig",
     "BacktestConfig",
     "DisasterRecoveryConfig",

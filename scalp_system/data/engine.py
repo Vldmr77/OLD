@@ -6,9 +6,9 @@ import os
 import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
-from typing import Deque, Dict, Iterable, Iterator, List, Optional
+from typing import Deque, Dict, Iterable, Iterator, List, Optional, Sequence
 
-from .models import OrderBook
+from .models import Candle, OrderBook, Trade
 
 
 @dataclass(slots=True)
@@ -91,27 +91,69 @@ class DataEngine:
         monitored_instruments: Optional[Iterable[str]] = None,
         soft_rss_limit_mb: int = 400,
         hard_rss_limit_mb: int = 700,
+        max_active_instruments: int = 15,
+        monitor_pool_size: int = 30,
+        trade_history_size: int = 200,
+        candle_history_size: int = 240,
     ) -> None:
         self._current = _TTLCache(max_instruments, ttl_seconds)
         self._history: Dict[str, Deque[OrderBook]] = {}
         self._history_size = history_size
         self._stats: Dict[str, InstrumentStats] = {}
         self._active_instruments: List[str] = []
-        self._monitored_pool: List[str] = list(monitored_instruments or [])
+        self._monitored_pool: List[str] = []
         self._soft_rss_limit = soft_rss_limit_mb * 1024 * 1024
         self._hard_rss_limit = hard_rss_limit_mb * 1024 * 1024
+        self._max_active = max_active_instruments
+        self._monitor_pool_size = max(monitor_pool_size, max_active_instruments)
+        self._trade_history_size = max(1, trade_history_size)
+        self._candle_history_size = max(1, candle_history_size)
+        self._trades: Dict[str, Deque[Trade]] = {}
+        self._candles: Dict[str, Deque[Candle]] = {}
+        if monitored_instruments:
+            self.update_monitored_pool(monitored_instruments)
 
     # ------------------------------------------------------------------
     # Active & monitored instruments
     # ------------------------------------------------------------------
     def update_active_instruments(self, instruments: Iterable[str]) -> None:
-        self._active_instruments = list(dict.fromkeys(instruments))
+        requested = list(dict.fromkeys(instruments))
+        if len(requested) < self._max_active:
+            supplement = [figi for figi in self._monitored_pool if figi not in requested]
+            requested.extend(supplement)
+        self._active_instruments = requested[: self._max_active]
 
     def update_monitored_pool(self, instruments: Iterable[str]) -> None:
-        self._monitored_pool = list(dict.fromkeys(instruments))
+        pool = list(dict.fromkeys(instruments))
+        for figi in self._active_instruments:
+            if figi not in pool:
+                pool.insert(0, figi)
+        self._monitored_pool = pool[: self._monitor_pool_size]
 
     def active_instruments(self) -> tuple[str, ...]:
         return tuple(self._active_instruments)
+
+    def monitored_instruments(self) -> tuple[str, ...]:
+        return tuple(self._monitored_pool)
+
+    def max_active(self) -> int:
+        return self._max_active
+
+    def seed_instruments(self, active: Sequence[str], monitored: Sequence[str]) -> None:
+        active_unique = list(dict.fromkeys(active))
+        monitored_unique = list(dict.fromkeys(monitored))
+        if len(active_unique) < self._max_active:
+            for figi in monitored_unique:
+                if figi not in active_unique:
+                    active_unique.append(figi)
+                    if len(active_unique) >= self._max_active:
+                        break
+        self._active_instruments = active_unique[: self._max_active]
+        pool: List[str] = []
+        for figi in list(active_unique) + monitored_unique:
+            if figi not in pool:
+                pool.append(figi)
+        self._monitored_pool = pool[: self._monitor_pool_size]
 
     def snapshot(self) -> dict:
         return {
@@ -192,6 +234,34 @@ class DataEngine:
             return ()
         return tuple(history)
 
+    def ingest_trades(self, figi: str, trades: Iterable[Trade]) -> None:
+        trades = list(trades)
+        if not trades:
+            return
+        history = self._trades.setdefault(figi, deque(maxlen=self._trade_history_size))
+        for trade in trades:
+            history.append(trade)
+
+    def recent_trades(self, figi: str) -> tuple[Trade, ...]:
+        history = self._trades.get(figi)
+        if not history:
+            return ()
+        return tuple(history)
+
+    def ingest_candles(self, figi: str, candles: Iterable[Candle]) -> None:
+        candles = list(candles)
+        if not candles:
+            return
+        history = self._candles.setdefault(figi, deque(maxlen=self._candle_history_size))
+        for candle in candles:
+            history.append(candle)
+
+    def recent_candles(self, figi: str) -> tuple[Candle, ...]:
+        history = self._candles.get(figi)
+        if not history:
+            return ()
+        return tuple(history)
+
     def atr(self, figi: str, periods: int = 5) -> float:
         """Compute a simple ATR proxy from the recent order book history."""
 
@@ -220,6 +290,8 @@ class DataEngine:
         for history in self._history.values():
             history.clear()
         self._stats.clear()
+        self._trades.clear()
+        self._candles.clear()
 
     def last_window(self, figi: str, length: Optional[int] = None) -> tuple[OrderBook, ...]:
         history = self._history.get(figi)
