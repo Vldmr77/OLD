@@ -20,6 +20,7 @@ from .ml.calibration import CalibrationCoordinator
 from .monitoring.audit import AuditLogger
 from .monitoring.drift import DriftDetector
 from .monitoring.metrics import MetricsRegistry
+from .monitoring.notifications import NotificationDispatcher
 from .monitoring.resource import ResourceMonitor
 from .risk.engine import RiskEngine
 from .security import KeyManager
@@ -67,6 +68,7 @@ class Orchestrator:
             memory_threshold=config.monitoring.memory_soft_limit,
             gpu_threshold=config.monitoring.gpu_soft_limit,
         )
+        self._notifications = NotificationDispatcher(config.notifications)
         self._key_manager: Optional[KeyManager] = None
         key_path = config.security.encryption_key_path
         env_key = os.getenv("SCALP_ENCRYPTION_KEY")
@@ -152,6 +154,17 @@ class Orchestrator:
                     )
                     self._audit_logger.log("RESOURCE", action.upper(), detail)
             self._data_engine.ingest_order_book(order_book)
+            mid_price = order_book.mid_price()
+            spread = order_book.spread()
+            if mid_price > 0:
+                spread_bps = (spread / mid_price) * 10_000
+                if (
+                    spread_bps
+                    >= self._config.notifications.liquidity_spread_threshold_bps
+                ):
+                    await self._notifications.notify_low_liquidity(
+                        order_book.figi, spread_bps
+                    )
             window = self._data_engine.last_window(
                 order_book.figi, self._config.features.rolling_window
             )
@@ -179,6 +192,9 @@ class Orchestrator:
                     self._audit_logger.log(
                         "ORDER", "EXECUTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
                     )
+                    await self._notifications.notify_order_filled(
+                        signal.figi, order_book.mid_price(), signal.confidence
+                    )
                 else:
                     LOGGER.warning("Order not executed: %s", report.reason)
                     self._audit_logger.log(
@@ -198,6 +214,9 @@ class Orchestrator:
                 LOGGER.error("Drift alert severity=%s halting trading", drift.severity)
                 self._audit_logger.log(
                     "RISK", "CIRCUIT_BREAKER", f"figi={order_book.figi};severity={drift.severity}"
+                )
+                await self._notifications.notify_circuit_breaker(
+                    order_book.figi, drift.severity
                 )
             rotation_counter += 1
             if rotation_counter % 50 == 0:

@@ -45,6 +45,12 @@ monitoring:
   audit_log_filename: audit.log
 security:
   encryption_key_path: ./runtime/secret.key
+notifications:
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  enable_sound_alerts: false
+  liquidity_spread_threshold_bps: 5.0
+  cooldown_seconds: 30
 training:
   dataset_path: ./data/training.jsonl
   output_dir: ./models

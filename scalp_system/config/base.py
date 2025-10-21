@@ -122,6 +122,17 @@ class SecurityConfig:
 
 
 @dataclass
+class NotificationConfig:
+    telegram_bot_token: Optional[str] = None
+    telegram_chat_id: Optional[str] = None
+    enable_sound_alerts: bool = False
+    high_risk_frequency_hz: int = 2500
+    low_liquidity_frequency_hz: int = 1500
+    liquidity_spread_threshold_bps: float = 5.0
+    cooldown_seconds: int = 30
+
+
+@dataclass
 class TrainingConfig:
     dataset_path: Path = Path("./data/training.jsonl")
     output_dir: Path = Path("./models")
@@ -175,6 +186,7 @@ class OrchestratorConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
+    notifications: NotificationConfig = field(default_factory=NotificationConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
 
@@ -188,6 +200,7 @@ class OrchestratorConfig:
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
         monitoring_data = _ensure_dict(data.get("monitoring", {}))
         security_data = _ensure_dict(data.get("security", {}))
+        notifications_data = _ensure_dict(data.get("notifications", {}))
         training_data = _ensure_dict(data.get("training", {}))
         backtest_data = _ensure_dict(data.get("backtest", {}))
         encryption_value = security_data.get("encryption_key_path")
@@ -209,6 +222,7 @@ class OrchestratorConfig:
             security=SecurityConfig(
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
             ),
+            notifications=NotificationConfig(**notifications_data),
             training=TrainingConfig(
                 dataset_path=_to_path(training_data.get("dataset_path", Path("./data/training.jsonl"))),
                 output_dir=_to_path(training_data.get("output_dir", Path("./models"))),
@@ -269,6 +283,7 @@ __all__ = [
     "ExecutionConfig",
     "StorageConfig",
     "MonitoringConfig",
+    "NotificationConfig",
     "SecurityConfig",
     "TrainingConfig",
     "BacktestConfig",

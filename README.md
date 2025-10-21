@@ -14,6 +14,7 @@
 - `scalp_system.monitoring` — детектор дрейфа и метрики.
 - `scalp_system.monitoring.audit` — аудит действий в формате W3C.
 - `scalp_system.monitoring.resource` — контроль загрузки CPU/GPU/памяти.
+- `scalp_system.monitoring.notifications` — Telegram-уведомления и звуковые сигналы.
 - `scalp_system.ml.calibration` — постановка задач калибровки моделей.
 - `scalp_system.storage` — SQLite репозиторий для логирования сигналов.
 - `scalp_system.utils.integrity` — проверки целостности данных при переподключении.
@@ -44,6 +45,12 @@ print(key.serialise())
 - `python -m scalp_system.cli.model_trainer train --dataset data/training.jsonl --output runtime/models`
 - `python -m scalp_system.cli.health_check --config config.example.yaml`
 - `python -m scalp_system.cli.backtest config.example.yaml --dataset data/backtest.jsonl --output runtime/reports/backtest.json`
+
+Секция `notifications` конфигурации задаёт параметры Telegram-уведомлений и локальных
+звуковых сигналов. При указании токена и идентификатора чата система отправляет
+сообщения о исполненных заявках, срабатывании защитных механизмов и предупреждениях о
+низкой ликвидности. Порог спреда в bps управляет порогом срабатывания сигналов
+с частотами 1.5 кГц (ликвидность) и 2.5 кГц (высокий риск).
 
 Секция `training` конфигурации описывает путь до JSONL-датасета с историческими примерами,
 параметры обучения (число эпох, скорость обучения, размер валидационной выборки) и место
