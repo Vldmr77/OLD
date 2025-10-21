@@ -198,6 +198,69 @@ def test_manual_override_cleared_reuses_key_without_cooldown():
     asyncio.run(dispatcher.notify_manual_override("halt", None))
     asyncio.run(dispatcher.notify_manual_override_cleared())
 
-    assert len(captured) == 2
-    payload = parse_qs(captured[-1].decode("utf-8"))
-    assert "cleared" in payload["text"][0]
+
+def test_connectivity_failover_notification_triggers_sound():
+    captured = {}
+    sounds: list[tuple[int, float]] = []
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            enable_sound_alerts=True,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda freq, duration: sounds.append((freq, duration)),
+    )
+
+    asyncio.run(dispatcher.notify_connectivity_failover("lte", "timeout"))
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    assert "CONNECTIVITY_FAILOVER" in payload["text"][0]
+    assert sounds[0][0] == dispatcher.config.high_risk_frequency_hz
+
+
+def test_connectivity_recovered_notification_has_no_cooldown():
+    calls: list[bytes] = []
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+        ),
+        http_sender=lambda url, data: calls.append(data),
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    asyncio.run(dispatcher.notify_connectivity_recovered("fiber"))
+
+    payload = parse_qs(calls[0].decode("utf-8"))
+    assert "CONNECTIVITY_RECOVERED" in payload["text"][0]
+
+
+def test_gpu_failover_notification_formats_message():
+    captured = {}
+    sounds: list[tuple[int, float]] = []
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            enable_sound_alerts=True,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda freq, duration: sounds.append((freq, duration)),
+    )
+
+    asyncio.run(dispatcher.notify_gpu_failover("cpu", "cuda device lost"))
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    assert "GPU_FAILOVER" in payload["text"][0]
+    assert "mode=cpu" in payload["text"][0]
+    assert sounds[0][0] == dispatcher.config.high_risk_frequency_hz

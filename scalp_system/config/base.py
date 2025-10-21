@@ -133,6 +133,24 @@ class NotificationConfig:
 
 
 @dataclass
+class ConnectivityConfig:
+    primary_label: str = "fiber"
+    backup_label: str = "lte"
+    failure_threshold: int = 1
+    recovery_message_count: int = 20
+    failover_latency_ms: int = 150
+
+    def ensure(self) -> None:
+        self.primary_label = self.primary_label or "fiber"
+        self.backup_label = self.backup_label or "lte"
+        if self.backup_label == self.primary_label:
+            self.backup_label = f"{self.backup_label}_backup"
+        self.failure_threshold = max(1, int(self.failure_threshold))
+        self.recovery_message_count = max(1, int(self.recovery_message_count))
+        self.failover_latency_ms = max(1, int(self.failover_latency_ms))
+
+
+@dataclass
 class ManualOverrideConfig:
     enabled: bool = False
     flag_path: Path = Path("./runtime/manual_override.flag")
@@ -274,6 +292,7 @@ class OrchestratorConfig:
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
+    connectivity: ConnectivityConfig = field(default_factory=ConnectivityConfig)
     manual_override: ManualOverrideConfig = field(default_factory=ManualOverrideConfig)
     reporting: ReportingConfig = field(default_factory=ReportingConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
@@ -291,6 +310,7 @@ class OrchestratorConfig:
         self.system.ensure()
         self.reporting.ensure()
         self.manual_override.ensure()
+        self.connectivity.ensure()
         self.disaster_recovery.ensure()
 
     @classmethod
@@ -298,6 +318,7 @@ class OrchestratorConfig:
         monitoring_data = _ensure_dict(data.get("monitoring", {}))
         security_data = _ensure_dict(data.get("security", {}))
         notifications_data = _ensure_dict(data.get("notifications", {}))
+        connectivity_data = _ensure_dict(data.get("connectivity", {}))
         manual_override_data = _ensure_dict(data.get("manual_override", {}))
         training_data = _ensure_dict(data.get("training", {}))
         backtest_data = _ensure_dict(data.get("backtest", {}))
@@ -329,6 +350,13 @@ class OrchestratorConfig:
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
             ),
             notifications=NotificationConfig(**notifications_data),
+            connectivity=ConnectivityConfig(
+                primary_label=connectivity_data.get("primary_label", "fiber"),
+                backup_label=connectivity_data.get("backup_label", "lte"),
+                failure_threshold=connectivity_data.get("failure_threshold", 1),
+                recovery_message_count=connectivity_data.get("recovery_message_count", 20),
+                failover_latency_ms=connectivity_data.get("failover_latency_ms", 150),
+            ),
             manual_override=ManualOverrideConfig(
                 enabled=manual_override_data.get("enabled", False),
                 flag_path=_to_path(

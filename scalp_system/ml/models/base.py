@@ -16,6 +16,7 @@ class ModelPrediction:
 class FeatureModel(ABC):
     def __init__(self) -> None:
         self._model_path: Optional[Path] = None
+        self._device: str = "gpu"
 
     @abstractmethod
     def predict(self, batch: Iterable[Sequence[float]]) -> list[ModelPrediction]:
@@ -34,6 +35,13 @@ class FeatureModel(ABC):
 
         # Default implementation is stateless.
         return None
+
+    def set_device(self, device: str) -> None:
+        self._device = device
+
+    @property
+    def device(self) -> str:
+        return self._device
 
 
 class WeightedEnsemble:

@@ -27,6 +27,7 @@ from .monitoring.metrics import MetricsRegistry
 from .monitoring.notifications import NotificationDispatcher
 from .monitoring.reporting import PerformanceReporter
 from .monitoring.resource import ResourceMonitor
+from .network import ConnectivityFailover
 from .risk.engine import RiskEngine
 from .security import KeyManager
 from .storage.checkpoint import CheckpointManager
@@ -77,6 +78,7 @@ class Orchestrator:
             gpu_threshold=config.monitoring.gpu_soft_limit,
         )
         self._notifications = NotificationDispatcher(config.notifications)
+        self._connectivity = ConnectivityFailover(config.connectivity)
         self._latency_monitor = LatencyMonitor(
             config.system.latency_thresholds,
             violation_limit=config.system.latency_violation_limit,
@@ -198,6 +200,7 @@ class Orchestrator:
             "mode": self._config.system.mode,
             "risk": self._risk_engine.snapshot(),
             "data": self._data_engine.snapshot(),
+            "connectivity": self._connectivity.snapshot(),
         }
 
     async def _persist_checkpoint(self) -> None:
@@ -256,6 +259,24 @@ class Orchestrator:
         self._manual_override_reason = None
         return False
 
+    async def _handle_stream_failure(self, exc: Exception) -> None:
+        reason = str(exc)
+        self._audit_logger.log(
+            "NETWORK", "STREAM_ERROR", f"channel={self._connectivity.active_channel};reason={reason}"
+        )
+        event, delay = self._connectivity.record_failure(reason)
+        if event and event.kind == "failover":
+            LOGGER.error(
+                "Connectivity failover to %s due to %s", event.channel, reason
+            )
+            self._audit_logger.log(
+                "NETWORK", "FAILOVER", f"channel={event.channel};reason={reason}"
+            )
+            self._data_engine.resynchronise()
+            await self._notifications.notify_connectivity_failover(event.channel, reason)
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     async def run(self) -> None:
         await self._await_startup_window()
         interval = int(self._config.system.checkpoint_interval_seconds)
@@ -272,6 +293,7 @@ class Orchestrator:
                 stream_factory,
                 delay=self._config.datafeed.reconnect_delay,
                 integrity_check=integrity_probe,
+                on_failure=self._handle_stream_failure,
             ):
                 await self._process_latency_alerts()
                 snapshot, mitigations = self._resource_monitor.check_thresholds()
@@ -297,58 +319,79 @@ class Orchestrator:
                     )
                     self._audit_logger.log("RESOURCE", action.upper(), detail)
                 self._data_engine.ingest_order_book(order_book)
+                recovery = self._connectivity.record_success()
+                if recovery and recovery.kind == "recovery":
+                    LOGGER.info("Connectivity restored on %s", recovery.channel)
+                    self._audit_logger.log(
+                        "NETWORK", "RECOVERED", f"channel={recovery.channel}"
+                    )
+                    self._data_engine.resynchronise()
+                    await self._notifications.notify_connectivity_recovered(
+                        recovery.channel
+                    )
                 if await self._process_manual_override():
                     continue
                 mid_price = order_book.mid_price()
                 spread = order_book.spread()
-            if mid_price > 0:
-                spread_bps = (spread / mid_price) * 10_000
-                if (
-                    spread_bps
-                    >= self._config.notifications.liquidity_spread_threshold_bps
-                ):
-                    await self._notifications.notify_low_liquidity(
-                        order_book.figi, spread_bps
-                    )
-            window = self._data_engine.last_window(
-                order_book.figi, self._config.features.rolling_window
-            )
-            if len(window) < 2:
-                continue
-            with timed("features", self._handle_latency):
-                market = self._data_engine.market_indicators()
-                features = self._feature_pipeline.transform(window, market=market)
-            with timed("ml", self._handle_latency):
-                signals = self._ml_engine.infer([features])
-            for signal in signals:
-                self._metrics.record_signal(signal.figi, signal.confidence)
-                self._repository.persist_signal(signal.figi, signal.direction, signal.confidence)
-                with timed("risk", self._handle_latency):
-                    allowed = self._risk_engine.evaluate_signal(
-                        signal, order_book.mid_price()
-                    )
-                if not allowed:
-                    LOGGER.info("Signal rejected by risk engine")
-                    self._audit_logger.log(
-                        "ORDER", "REJECTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
-                    )
+                if mid_price > 0:
+                    spread_bps = (spread / mid_price) * 10_000
+                    if (
+                        spread_bps
+                        >= self._config.notifications.liquidity_spread_threshold_bps
+                    ):
+                        await self._notifications.notify_low_liquidity(
+                            order_book.figi, spread_bps
+                        )
+                window = self._data_engine.last_window(
+                    order_book.figi, self._config.features.rolling_window
+                )
+                if len(window) < 2:
                     continue
-                report = await ExecutionEngine(
-                    broker_factory, self._risk_engine
-                ).execute_signal(signal, order_book.mid_price(), skip_risk=True)
-                if report.accepted:
-                    LOGGER.info("Order executed for %s", signal.figi)
+                with timed("features", self._handle_latency):
+                    market = self._data_engine.market_indicators()
+                    features = self._feature_pipeline.transform(window, market=market)
+                with timed("ml", self._handle_latency):
+                    signals = self._ml_engine.infer([features])
+                failover_detail = self._ml_engine.drain_failover_event()
+                if failover_detail:
+                    mode = self._ml_engine.device_mode
+                    LOGGER.error("GPU failure detected, running in %s mode", mode)
                     self._audit_logger.log(
-                        "ORDER", "EXECUTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
+                        "RESOURCE", "GPU_FAILOVER", f"mode={mode};detail={failover_detail}"
                     )
-                    await self._notifications.notify_order_filled(
-                        signal.figi, order_book.mid_price(), signal.confidence
-                    )
-                else:
-                    LOGGER.warning("Order not executed: %s", report.reason)
-                    self._audit_logger.log(
-                        "ORDER", "FAILED", f"figi={signal.figi};reason={report.reason}"
-                    )
+                    await self._notifications.notify_gpu_failover(mode, failover_detail)
+                delay = self._ml_engine.throttle_delay
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                for signal in signals:
+                    self._metrics.record_signal(signal.figi, signal.confidence)
+                    self._repository.persist_signal(signal.figi, signal.direction, signal.confidence)
+                    with timed("risk", self._handle_latency):
+                        allowed = self._risk_engine.evaluate_signal(
+                            signal, order_book.mid_price()
+                        )
+                    if not allowed:
+                        LOGGER.info("Signal rejected by risk engine")
+                        self._audit_logger.log(
+                            "ORDER", "REJECTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
+                        )
+                        continue
+                    report = await ExecutionEngine(
+                        broker_factory, self._risk_engine
+                    ).execute_signal(signal, order_book.mid_price(), skip_risk=True)
+                    if report.accepted:
+                        LOGGER.info("Order executed for %s", signal.figi)
+                        self._audit_logger.log(
+                            "ORDER", "EXECUTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
+                        )
+                        await self._notifications.notify_order_filled(
+                            signal.figi, order_book.mid_price(), signal.confidence
+                        )
+                    else:
+                        LOGGER.warning("Order not executed: %s", report.reason)
+                        self._audit_logger.log(
+                            "ORDER", "FAILED", f"figi={signal.figi};reason={report.reason}"
+                        )
             risk_metrics = self._risk_engine.metrics({order_book.figi: order_book.mid_price()})
             self._metrics.record_risk(order_book.figi, risk_metrics.var_value)
             history = self._data_engine.history(order_book.figi)

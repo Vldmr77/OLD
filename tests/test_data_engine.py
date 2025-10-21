@@ -45,3 +45,14 @@ def test_rotation_replaces_inactive_instrument():
     replacements = engine.rotate_instruments()
     assert replacements
     assert replacements[0][0] == "AAA"
+
+
+def test_resynchronise_clears_caches():
+    engine = DataEngine(ttl_seconds=60.0, max_instruments=5, history_size=10)
+    engine.update_active_instruments(["AAA"])
+    engine.ingest_order_book(make_order_book("AAA", 100.0))
+    assert engine.get_order_book("AAA") is not None
+    assert engine.history("AAA")
+    engine.resynchronise()
+    assert engine.get_order_book("AAA") is None
+    assert engine.history("AAA") == ()

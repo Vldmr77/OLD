@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
 from collections import deque
 from datetime import datetime, timezone
@@ -108,17 +109,25 @@ async def iterate_stream(
     *,
     delay: float = 0.0,
     integrity_check: Optional[Callable[[], Awaitable[bool]]] = None,
+    on_failure: Optional[Callable[[Exception], Awaitable[None] | None]] = None,
+    on_recovery: Optional[Callable[[], Awaitable[None] | None]] = None,
 ) -> AsyncIterator[OrderBook]:
     backoff = delay or 1.0
+    recovering = False
     while True:
         try:
             async with stream_factory() as stream:
                 async for order_book in stream.order_books():
                     backoff = delay or 1.0
+                    if recovering and on_recovery is not None:
+                        await _maybe_await(on_recovery)
+                        recovering = False
                     yield order_book
             break
         except Exception as exc:  # pragma: no cover - defensive branch
             LOGGER.exception("Market data stream error: %s", exc)
+            if on_failure is not None:
+                await _maybe_await(on_failure, exc)
             if integrity_check is not None:
                 try:
                     ok = await integrity_check()
@@ -128,6 +137,13 @@ async def iterate_stream(
                     LOGGER.exception("Integrity check raised an exception")
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
+            recovering = True
+
+
+async def _maybe_await(callback, *args):
+    result = callback(*args)
+    if inspect.isawaitable(result):
+        await result
 
 
 __all__ = ["MarketDataStream", "RollingOrderBookBuffer", "iterate_stream"]

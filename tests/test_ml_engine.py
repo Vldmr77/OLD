@@ -1,3 +1,5 @@
+import pytest
+
 from scalp_system.config.base import MLConfig
 from scalp_system.features.pipeline import FeatureVector
 from scalp_system.ml.engine import MLEngine, _MIN_MODEL_SIZE
@@ -27,3 +29,27 @@ def test_ml_engine_reload_recovers_corrupted(tmp_path):
     engine.reload_models(model_dir)
     for filename in engine._model_files.values():  # type: ignore[attr-defined]
         assert (model_dir / filename).stat().st_size >= _MIN_MODEL_SIZE * 2
+
+
+def test_gpu_failure_triggers_cpu_fallback(monkeypatch):
+    config = MLConfig()
+    engine = MLEngine(config)
+    vector = FeatureVector(figi="FIGI", timestamp=0.0, features=[1.0] * 8)
+
+    original_predict = engine._models["lstm_ob"].predict  # type: ignore[attr-defined]
+    call_count = {"calls": 0}
+
+    def flaky_predict(batch):
+        call_count["calls"] += 1
+        if call_count["calls"] == 1:
+            raise RuntimeError("CUDA device lost")
+        return original_predict(batch)
+
+    engine._models["lstm_ob"].predict = flaky_predict  # type: ignore[attr-defined]
+
+    signals = engine.infer([vector])
+    assert signals
+    assert engine.device_mode == "cpu"
+    assert pytest.approx(engine.throttle_delay, rel=1e-6) == 0.2
+    detail = engine.drain_failover_event()
+    assert detail is not None and "cuda" in detail.lower()

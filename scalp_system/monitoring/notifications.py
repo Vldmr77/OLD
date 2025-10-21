@@ -140,6 +140,34 @@ class NotificationDispatcher:
             cooldown_override=0,
         )
 
+    async def notify_connectivity_failover(self, channel: str, reason: str) -> bool:
+        message = f"CONNECTIVITY_FAILOVER channel={channel} reason={reason}"
+        return await self._dispatch(
+            key=f"connectivity:{channel}",
+            message=message,
+            beep_frequency=self.config.high_risk_frequency_hz,
+            beep_duration=0.5,
+            cooldown_override=0,
+        )
+
+    async def notify_connectivity_recovered(self, channel: str) -> bool:
+        message = f"CONNECTIVITY_RECOVERED channel={channel}"
+        return await self._dispatch(
+            key=f"connectivity:{channel}",
+            message=message,
+            cooldown_override=0,
+        )
+
+    async def notify_gpu_failover(self, mode: str, detail: str) -> bool:
+        message = f"GPU_FAILOVER mode={mode} detail={detail}"
+        return await self._dispatch(
+            key="gpu_failover",
+            message=message,
+            beep_frequency=self.config.high_risk_frequency_hz,
+            beep_duration=0.4,
+            cooldown_override=0,
+        )
+
     async def _dispatch(
         self,
         *,

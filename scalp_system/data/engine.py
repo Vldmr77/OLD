@@ -192,6 +192,14 @@ class DataEngine:
             return ()
         return tuple(history)
 
+    def resynchronise(self) -> None:
+        """Flush cached order books so the engine refetches fresh data."""
+
+        self._current.clear()
+        for history in self._history.values():
+            history.clear()
+        self._stats.clear()
+
     def last_window(self, figi: str, length: Optional[int] = None) -> tuple[OrderBook, ...]:
         history = self._history.get(figi)
         if not history:

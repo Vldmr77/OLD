@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable
+from typing import Dict, Iterable, Optional
 
 from ..config.base import MLConfig
 from ..features.pipeline import FeatureVector
@@ -50,13 +50,25 @@ class MLEngine:
                 "svm_vol": config.weights.svm_volatility,
             }
         )
+        self._device_mode = "gpu"
+        self._throttle_delay = 0.0
+        self._pending_failover: Optional[str] = None
 
     def infer(self, batch: Iterable[FeatureVector]) -> list[MLSignal]:
         batch = list(batch)
         feature_batches = [vector.features for vector in batch]
         predictions: Dict[str, list[ModelPrediction]] = {}
-        for name, model in self._models.items():
-            predictions[name] = model.predict(feature_batches)
+        try:
+            for name, model in self._models.items():
+                predictions[name] = model.predict(feature_batches)
+        except RuntimeError as exc:
+            if self._should_failover(exc):
+                self._activate_cpu_fallback(str(exc))
+                predictions = {
+                    name: model.predict(feature_batches) for name, model in self._models.items()
+                }
+            else:
+                raise
         signals: list[MLSignal] = []
         for idx, vector in enumerate(batch):
             combined = self._ensemble.combine({name: preds[idx] for name, preds in predictions.items()})
@@ -65,6 +77,19 @@ class MLEngine:
                 MLSignal(figi=vector.figi, direction=direction, confidence=combined.confidence)
             )
         return signals
+
+    @property
+    def throttle_delay(self) -> float:
+        return self._throttle_delay
+
+    @property
+    def device_mode(self) -> str:
+        return self._device_mode
+
+    def drain_failover_event(self) -> Optional[str]:
+        message = self._pending_failover
+        self._pending_failover = None
+        return message
 
     def reload_models(self, model_dir: Path) -> None:
         """Reload quantised models from disk, recovering corrupted files if needed."""
@@ -100,6 +125,20 @@ class MLEngine:
         for filename in self._model_files.values():
             path = base_dir / filename
             path.write_bytes(payload)
+
+    def _should_failover(self, exc: RuntimeError) -> bool:
+        message = str(exc).lower()
+        return "cuda" in message or "gpu" in message
+
+    def _activate_cpu_fallback(self, reason: str) -> None:
+        if self._device_mode == "cpu":
+            return
+        LOGGER.error("GPU failure detected: %s; switching to CPU fallback", reason)
+        self._device_mode = "cpu"
+        self._throttle_delay = 0.2
+        self._pending_failover = reason
+        for model in self._models.values():
+            model.set_device("cpu")
 
 
 __all__ = ["MLSignal", "MLEngine"]

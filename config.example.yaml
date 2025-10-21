@@ -69,6 +69,12 @@ notifications:
   enable_sound_alerts: false
   liquidity_spread_threshold_bps: 5.0
   cooldown_seconds: 30
+connectivity:
+  primary_label: fiber
+  backup_label: lte
+  failure_threshold: 1
+  recovery_message_count: 2
+  failover_latency_ms: 150
 manual_override:
   enabled: false
   flag_path: ./runtime/manual_override.flag
