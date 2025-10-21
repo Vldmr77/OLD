@@ -5,6 +5,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Callable, Dict, Optional
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -103,6 +104,19 @@ class NotificationDispatcher:
             key="performance",
             message=message,
             cooldown_override=self.config.cooldown_seconds,
+        )
+
+    async def notify_backup_created(
+        self, snapshot_dir: Path, size_bytes: int
+    ) -> bool:
+        message = (
+            "BACKUP_CREATED "
+            f"path={snapshot_dir} size={size_bytes}B"
+        )
+        return await self._dispatch(
+            key="backup",
+            message=message,
+            cooldown_override=0,
         )
 
     async def _dispatch(

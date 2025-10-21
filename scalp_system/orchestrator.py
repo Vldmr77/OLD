@@ -29,6 +29,7 @@ from .monitoring.resource import ResourceMonitor
 from .risk.engine import RiskEngine
 from .security import KeyManager
 from .storage.checkpoint import CheckpointManager
+from .storage.disaster_recovery import DisasterRecoveryManager
 from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
@@ -84,6 +85,11 @@ class Orchestrator:
             config.storage.base_path / "checkpoint.json"
         )
         self._checkpoint_task: Optional[asyncio.Task] = None
+        self._disaster_recovery = DisasterRecoveryManager(
+            config.storage.base_path,
+            config.disaster_recovery,
+            notifications=self._notifications,
+        )
         self._key_manager: Optional[KeyManager] = None
         key_path = config.security.encryption_key_path
         env_key = os.getenv("SCALP_ENCRYPTION_KEY")
@@ -356,6 +362,7 @@ class Orchestrator:
                     LOGGER.info("Calibration request enqueued for %s", order_book.figi)
                     self._risk_engine.acknowledge_calibration()
             await self._performance_reporter.maybe_emit()
+            await self._disaster_recovery.maybe_replicate()
         finally:
             if self._checkpoint_task:
                 self._checkpoint_task.cancel()

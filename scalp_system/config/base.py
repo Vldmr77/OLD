@@ -133,6 +133,26 @@ class NotificationConfig:
 
 
 @dataclass
+class DisasterRecoveryConfig:
+    enabled: bool = False
+    replication_path: Path = Path("./runtime/backups")
+    include_patterns: list[str] = field(
+        default_factory=lambda: ["*.db", "*.json", "*.jsonl"]
+    )
+    max_snapshots: int = 5
+    interval_minutes: int = 60
+
+    def ensure(self) -> None:
+        if not isinstance(self.replication_path, Path):
+            self.replication_path = Path(self.replication_path).expanduser()
+        self.replication_path.mkdir(parents=True, exist_ok=True)
+        if not self.include_patterns:
+            self.include_patterns = ["*.db", "*.json", "*.jsonl"]
+        self.max_snapshots = max(1, int(self.max_snapshots))
+        self.interval_minutes = max(0, int(self.interval_minutes))
+
+
+@dataclass
 class SystemConfig:
     mode: Literal["development", "forward-test", "production"] = "development"
     startup_time: Optional[str] = None
@@ -236,6 +256,9 @@ class OrchestratorConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
+    disaster_recovery: DisasterRecoveryConfig = field(
+        default_factory=DisasterRecoveryConfig
+    )
 
     def __post_init__(self) -> None:
         self.storage.ensure()
@@ -244,6 +267,7 @@ class OrchestratorConfig:
         self.backtest.ensure()
         self.system.ensure()
         self.reporting.ensure()
+        self.disaster_recovery.ensure()
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
@@ -254,7 +278,13 @@ class OrchestratorConfig:
         backtest_data = _ensure_dict(data.get("backtest", {}))
         system_data = _ensure_dict(data.get("system", {}))
         reporting_data = _ensure_dict(data.get("reporting", {}))
+        disaster_data = _ensure_dict(data.get("disaster_recovery", {}))
         encryption_value = security_data.get("encryption_key_path")
+        include_patterns = disaster_data.get("include_patterns")
+        if isinstance(include_patterns, list):
+            patterns = [str(value) for value in include_patterns]
+        else:
+            patterns = ["*.db", "*.json", "*.jsonl"]
         return cls(
             environment=data.get("environment", "development"),
             logging=LoggingConfig(**_ensure_dict(data.get("logging", {}))),
@@ -283,6 +313,17 @@ class OrchestratorConfig:
                         "report_path", Path("./runtime/reports/performance.jsonl")
                     )
                 ),
+            ),
+            disaster_recovery=DisasterRecoveryConfig(
+                enabled=disaster_data.get("enabled", False),
+                replication_path=_to_path(
+                    disaster_data.get(
+                        "replication_path", Path("./runtime/backups")
+                    )
+                ),
+                include_patterns=patterns,
+                max_snapshots=disaster_data.get("max_snapshots", 5),
+                interval_minutes=disaster_data.get("interval_minutes", 60),
             ),
             training=TrainingConfig(
                 dataset_path=_to_path(training_data.get("dataset_path", Path("./data/training.jsonl"))),
@@ -357,5 +398,6 @@ __all__ = [
     "ReportingConfig",
     "TrainingConfig",
     "BacktestConfig",
+    "DisasterRecoveryConfig",
     "OrchestratorConfig",
 ]

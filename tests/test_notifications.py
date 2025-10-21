@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from urllib.parse import parse_qs
 
 from scalp_system.config.base import NotificationConfig
@@ -125,3 +126,27 @@ def test_performance_summary_formats_payload():
     payload = parse_qs(captured["data"].decode("utf-8"))
     assert "PERFORMANCE" in payload["text"][0]
     assert "state=ACTIVE" in payload["text"][0]
+
+
+def test_backup_notification_includes_path(tmp_path: Path):
+    captured = {}
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+        ),
+        http_sender=fake_http,
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    asyncio.run(dispatcher.notify_backup_created(snapshot, size_bytes=1024))
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    assert "BACKUP_CREATED" in payload["text"][0]
+    assert str(snapshot) in payload["text"][0]

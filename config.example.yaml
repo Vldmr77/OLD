@@ -47,6 +47,15 @@ storage:
   cache_flush_min_seconds: 1.0
   cache_flush_max_seconds: 5.0
   cache_target_buffer: 50
+disaster_recovery:
+  enabled: true
+  replication_path: ./runtime/backups
+  include_patterns:
+    - "*.db"
+    - "*.json"
+    - "*.jsonl"
+  interval_minutes: 30
+  max_snapshots: 12
 monitoring:
   cpu_soft_limit: 90.0
   memory_soft_limit: 85.0
