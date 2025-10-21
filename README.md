@@ -33,6 +33,16 @@ python scripts/apply_tinkoff_tokens.py --sandbox-token <TOKEN> --production-toke
 python -m scalp_system  # использует пакетный config.example.yaml по умолчанию
 ```
 
+Если запуск происходит из IDE или требуется «ярлык», используйте скрипт
+`launch_scalp_system.py`: он добавляет проект в `sys.path`, переходит в корень
+репозитория и затем выполняет точку входа `scalp_system.__main__`. Скрипт принимает
+те же аргументы командной строки, что и `python -m scalp_system`, поэтому можно
+передать альтернативный путь к конфигурации:
+
+```bash
+python launch_scalp_system.py ./my_config.yaml
+```
+
 При отсутствии поддержки YAML можно использовать JSON-конфигурацию (`config.json`).
 Конфигурация по умолчанию лежит в `scalp_system/config/config.example.yaml` и
 используется всеми CLI инструментами, если не указать иной путь.
