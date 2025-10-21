@@ -904,16 +904,43 @@ class Orchestrator:
 def run_from_yaml(path: str | Path) -> None:
     config = load_config(path)
     logging.basicConfig(level=getattr(logging, config.logging.level))
-    try:
-        ensure_sdk_available()
-    except TinkoffSDKUnavailable as exc:
-        LOGGER.error(
-            "Cannot start orchestrator without the tinkoff-investments SDK: %s", exc
-        )
-        LOGGER.error(
-            "Install the bundled wheel via scripts/install_vendor.py or pip before running."
-        )
-        raise SystemExit(1) from exc
+
+    token = (
+        config.datafeed.sandbox_token
+        if config.datafeed.use_sandbox
+        else config.datafeed.production_token
+    )
+    token_missing = is_placeholder_token(token)
+    allow_tokenless = bool(getattr(config.datafeed, "allow_tokenless", False))
+    requires_sdk = (
+        config.system.mode == "production"
+        or not allow_tokenless
+        or not token_missing
+    )
+
+    if requires_sdk:
+        try:
+            ensure_sdk_available()
+        except TinkoffSDKUnavailable as exc:
+            LOGGER.error(
+                "Cannot start orchestrator without the tinkoff-investments SDK: %s", exc
+            )
+            LOGGER.error(
+                "Install the bundled wheel via scripts/install_vendor.py or pip before running."
+            )
+            raise SystemExit(1) from exc
+    else:
+        try:
+            ensure_sdk_available()
+        except TinkoffSDKUnavailable:
+            LOGGER.warning(
+                "tinkoff-investments SDK not installed; continuing in offline mode."
+            )
+        else:
+            LOGGER.info(
+                "tinkoff-investments SDK detected; offline mode may stream cached data."
+            )
+
     orchestrator = Orchestrator(config)
     asyncio.run(orchestrator.run())
 
