@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, Literal, Optional
+from typing import Dict, Literal, Optional
 
 
 @dataclass
@@ -96,6 +96,19 @@ class StorageConfig:
 
 
 @dataclass
+class MonitoringConfig:
+    cpu_soft_limit: float = 90.0
+    memory_soft_limit: float = 90.0
+    gpu_soft_limit: float = 90.0
+    audit_log_filename: str = "audit.log"
+
+
+@dataclass
+class SecurityConfig:
+    encryption_key_path: Optional[Path] = None
+
+
+@dataclass
 class OrchestratorConfig:
     environment: str = "development"
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -105,6 +118,8 @@ class OrchestratorConfig:
     risk: RiskLimits = field(default_factory=RiskLimits)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
+    security: SecurityConfig = field(default_factory=SecurityConfig)
 
     def __post_init__(self) -> None:
         self.storage.ensure()
@@ -112,6 +127,9 @@ class OrchestratorConfig:
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
+        monitoring_data = _ensure_dict(data.get("monitoring", {}))
+        security_data = _ensure_dict(data.get("security", {}))
+        encryption_value = security_data.get("encryption_key_path")
         return cls(
             environment=data.get("environment", "development"),
             logging=LoggingConfig(**_ensure_dict(data.get("logging", {}))),
@@ -126,6 +144,10 @@ class OrchestratorConfig:
             risk=RiskLimits(**_ensure_dict(data.get("risk", {}))),
             execution=ExecutionConfig(**_ensure_dict(data.get("execution", {}))),
             storage=StorageConfig(**_ensure_dict(data.get("storage", {}))),
+            monitoring=MonitoringConfig(**monitoring_data),
+            security=SecurityConfig(
+                encryption_key_path=_to_path(encryption_value) if encryption_value else None
+            ),
         )
 
     def json(self, indent: int = 2) -> str:
@@ -134,6 +156,14 @@ class OrchestratorConfig:
 
 def _ensure_dict(value: object) -> Dict[str, object]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _to_path(value: object) -> Path:
+    if isinstance(value, Path):
+        return value
+    if isinstance(value, str):
+        return Path(value).expanduser()
+    raise TypeError("Expected string or Path for path value")
 
 
 def _to_json(config: OrchestratorConfig, indent: int = 2) -> str:
@@ -160,5 +190,7 @@ __all__ = [
     "RiskLimits",
     "ExecutionConfig",
     "StorageConfig",
+    "MonitoringConfig",
+    "SecurityConfig",
     "OrchestratorConfig",
 ]

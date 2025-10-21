@@ -2,7 +2,7 @@ environment: development
 logging:
   level: INFO
 datafeed:
-  sandbox_token: "YOUR_TOKEN"
+  sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
   use_sandbox: true
   instruments:
     - BBG004730ZJ9
@@ -32,3 +32,10 @@ execution:
   account_id: ""
 storage:
   base_path: ./runtime
+monitoring:
+  cpu_soft_limit: 90.0
+  memory_soft_limit: 85.0
+  gpu_soft_limit: 90.0
+  audit_log_filename: audit.log
+security:
+  encryption_key_path: ./runtime/secret.key

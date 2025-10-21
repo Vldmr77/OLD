@@ -11,9 +11,12 @@
 - `scalp_system.risk` — риск-менеджмент и контроль лимитов.
 - `scalp_system.execution` — исполнение заявок через API брокера.
 - `scalp_system.monitoring` — детектор дрейфа и метрики.
+- `scalp_system.monitoring.audit` — аудит действий в формате W3C.
+- `scalp_system.monitoring.resource` — контроль загрузки CPU/GPU/памяти.
 - `scalp_system.ml.calibration` — постановка задач калибровки моделей.
 - `scalp_system.storage` — SQLite репозиторий для логирования сигналов.
 - `scalp_system.utils.integrity` — проверки целостности данных при переподключении.
+- `scalp_system.security` — менеджер ключей шифрования токенов.
 
 ## Запуск
 
@@ -23,6 +26,15 @@ python -m scalp_system config.example.yaml
 ```
 
 При отсутствии поддержки YAML можно использовать JSON-конфигурацию (`config.json`).
+
+Для работы с зашифрованными токенами укажите путь к Fernet-ключу в секции `security`,
+а сами значения пометьте префиксом `enc:`. Ключ можно создать командой:
+
+```python
+from scalp_system.security import KeyManager
+key = KeyManager.generate()
+print(key.serialise())
+```
 
 ## Дополнительные утилиты
 
@@ -36,3 +48,5 @@ python -m scalp_system config.example.yaml
 - Триггеры на калибровку пишутся в `runtime/calibration_queue.jsonl` с дедупликацией.
 - Резервные копии сигналов сохраняются в `runtime/signals.fallback.jsonl`, кеш состояния сбрасывается каждые 30 секунд.
 - Перезагрузка моделей очищает кэш фич, валидирует TFLite файлы и уведомляет RiskEngine.
+- Аудит действий пишется в формате W3C (`runtime/audit.log`) с тегами `ORDER`, `RISK`, `RESOURCE`.
+- Монитор ресурсов переводит систему в упрощённый режим при превышении лимитов CPU/GPU/памяти.
