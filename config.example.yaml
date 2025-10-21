@@ -7,6 +7,18 @@ system:
     ml: 20.0
     risk: 8.0
   latency_violation_limit: 3
+session:
+  enabled: true
+  start_time: "09:45"
+  end_time: "23:50"
+  pre_open_minutes: 10
+  post_close_minutes: 5
+  allowed_weekdays:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
 environment: development
 logging:
   level: INFO

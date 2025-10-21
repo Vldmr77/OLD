@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Literal, Optional
 
@@ -216,6 +217,33 @@ class DisasterRecoveryConfig:
 
 
 @dataclass
+class SessionScheduleConfig:
+    enabled: bool = False
+    start_time: str = "09:50"
+    end_time: str = "23:50"
+    pre_open_minutes: int = 5
+    post_close_minutes: int = 5
+    allowed_weekdays: list[int] = field(default_factory=lambda: [0, 1, 2, 3, 4])
+
+    def ensure(self) -> None:
+        self.pre_open_minutes = max(0, int(self.pre_open_minutes))
+        self.post_close_minutes = max(0, int(self.post_close_minutes))
+        self.start_time = _validate_time(self.start_time, default="09:50")
+        self.end_time = _validate_time(self.end_time, default="23:50")
+        cleaned: list[int] = []
+        for value in self.allowed_weekdays:
+            try:
+                weekday = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= weekday <= 6:
+                cleaned.append(weekday)
+        if not cleaned:
+            cleaned = list(range(7))
+        self.allowed_weekdays = sorted(dict.fromkeys(cleaned))
+
+
+@dataclass
 class SystemConfig:
     mode: Literal["development", "forward-test", "production"] = "development"
     startup_time: Optional[str] = None
@@ -322,6 +350,7 @@ class OrchestratorConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
+    session: SessionScheduleConfig = field(default_factory=SessionScheduleConfig)
     disaster_recovery: DisasterRecoveryConfig = field(
         default_factory=DisasterRecoveryConfig
     )
@@ -338,6 +367,7 @@ class OrchestratorConfig:
         self.connectivity.ensure()
         self.monitoring.ensure()
         self.disaster_recovery.ensure()
+        self.session.ensure()
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
@@ -352,6 +382,7 @@ class OrchestratorConfig:
         system_data = _ensure_dict(data.get("system", {}))
         reporting_data = _ensure_dict(data.get("reporting", {}))
         disaster_data = _ensure_dict(data.get("disaster_recovery", {}))
+        session_data = _ensure_dict(data.get("session", {}))
         encryption_value = security_data.get("encryption_key_path")
         include_patterns = disaster_data.get("include_patterns")
         if isinstance(include_patterns, list):
@@ -460,6 +491,14 @@ class OrchestratorConfig:
                 latency_thresholds=_ensure_dict(system_data.get("latency_thresholds", {})),
                 latency_violation_limit=system_data.get("latency_violation_limit", 3),
             ),
+            session=SessionScheduleConfig(
+                enabled=session_data.get("enabled", False),
+                start_time=session_data.get("start_time", "09:50"),
+                end_time=session_data.get("end_time", "23:50"),
+                pre_open_minutes=session_data.get("pre_open_minutes", 5),
+                post_close_minutes=session_data.get("post_close_minutes", 5),
+                allowed_weekdays=list(session_data.get("allowed_weekdays", [0, 1, 2, 3, 4])),
+            ),
         )
 
     def json(self, indent: int = 2) -> str:
@@ -493,6 +532,16 @@ def _to_json(config: OrchestratorConfig, indent: int = 2) -> str:
     return json.dumps(convert(config), indent=indent)
 
 
+def _validate_time(value: object, *, default: str) -> str:
+    if isinstance(value, str):
+        try:
+            datetime.strptime(value, "%H:%M")
+            return value
+        except ValueError:
+            pass
+    return default
+
+
 __all__ = [
     "LoggingConfig",
     "DataFeedConfig",
@@ -507,6 +556,7 @@ __all__ = [
     "FallbackConfig",
     "SecurityConfig",
     "ManualOverrideConfig",
+    "SessionScheduleConfig",
     "SystemConfig",
     "ReportingConfig",
     "TrainingConfig",

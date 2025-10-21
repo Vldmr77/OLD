@@ -309,3 +309,55 @@ def test_fallback_signal_notification_bypasses_cooldown():
 
     assert sent is False
     assert sounds[0][0] == dispatcher.config.high_risk_frequency_hz
+
+
+def test_session_suspended_notification_mentions_resume():
+    captured = {}
+    sounds: list[tuple[int, float]] = []
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            enable_sound_alerts=True,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda freq, duration: sounds.append((freq, duration)),
+    )
+
+    resume_at = datetime(2024, 1, 2, 10, 0, 0)
+    asyncio.run(dispatcher.notify_session_suspended("weekday_blocked", resume_at))
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    text = payload["text"][0]
+    assert "SESSION_SUSPENDED" in text
+    assert "weekday_blocked" in text
+    assert "resume_at=" in text
+    assert sounds[0][0] == dispatcher.config.high_risk_frequency_hz
+
+
+def test_session_resumed_notification_includes_next_pause():
+    captured = {}
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+        ),
+        http_sender=fake_http,
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    next_pause = datetime(2024, 1, 2, 19, 0, 0)
+    asyncio.run(dispatcher.notify_session_resumed(next_pause))
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    text = payload["text"][0]
+    assert "SESSION_RESUMED" in text
+    assert "next_pause=" in text

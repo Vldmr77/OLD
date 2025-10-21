@@ -140,6 +140,30 @@ class NotificationDispatcher:
             cooldown_override=0,
         )
 
+    async def notify_session_suspended(
+        self, reason: str, resume_at: Optional[datetime]
+    ) -> bool:
+        resume = f" resume_at={resume_at.isoformat()}" if resume_at else ""
+        message = f"SESSION_SUSPENDED reason={reason}{resume}".strip()
+        return await self._dispatch(
+            key="session",
+            message=message,
+            beep_frequency=self.config.high_risk_frequency_hz,
+            beep_duration=0.4,
+            cooldown_override=0,
+        )
+
+    async def notify_session_resumed(
+        self, next_pause: Optional[datetime]
+    ) -> bool:
+        suffix = f" next_pause={next_pause.isoformat()}" if next_pause else ""
+        message = f"SESSION_RESUMED{suffix}"
+        return await self._dispatch(
+            key="session",
+            message=message,
+            cooldown_override=0,
+        )
+
     async def notify_connectivity_failover(self, channel: str, reason: str) -> bool:
         message = f"CONNECTIVITY_FAILOVER channel={channel} reason={reason}"
         return await self._dispatch(

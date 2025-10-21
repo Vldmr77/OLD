@@ -13,6 +13,7 @@ from typing import Callable, Deque, Optional
 from .config.base import OrchestratorConfig
 from .config.loader import load_config
 from .control.manual_override import ManualOverrideGuard
+from .control.session import SessionGuard
 from .data.engine import DataEngine
 from .data.streams import MarketDataStream, iterate_stream
 from .execution.client import BrokerClient
@@ -105,6 +106,7 @@ class Orchestrator:
         self._manual_override = ManualOverrideGuard(config.manual_override)
         self._manual_override_active = False
         self._manual_override_reason: Optional[str] = None
+        self._session_guard = SessionGuard(config.session)
         self._key_manager: Optional[KeyManager] = None
         key_path = config.security.encryption_key_path
         env_key = os.getenv("SCALP_ENCRYPTION_KEY")
@@ -291,6 +293,44 @@ class Orchestrator:
         self._manual_override_reason = None
         return False
 
+    async def _process_session_schedule(self) -> bool:
+        state = self._session_guard.evaluate()
+        if state.changed:
+            if state.active:
+                next_pause = (
+                    state.next_transition.isoformat()
+                    if state.next_transition
+                    else "unknown"
+                )
+                self._audit_logger.log(
+                    "CONTROL",
+                    "SESSION_RESUMED",
+                    f"next_pause={next_pause}",
+                )
+                await self._notifications.notify_session_resumed(
+                    state.next_transition
+                )
+            else:
+                reason = state.reason or "schedule"
+                resume_at = (
+                    state.next_transition.isoformat()
+                    if state.next_transition
+                    else "unspecified"
+                )
+                self._audit_logger.log(
+                    "CONTROL",
+                    "SESSION_SUSPENDED",
+                    f"reason={reason};resume_at={resume_at}",
+                )
+                await self._notifications.notify_session_suspended(
+                    reason,
+                    state.next_transition,
+                )
+        if not state.active:
+            await asyncio.sleep(0)
+            return False
+        return True
+
     async def _handle_stream_failure(self, exc: Exception) -> None:
         reason = str(exc)
         self._audit_logger.log(
@@ -372,6 +412,8 @@ class Orchestrator:
                         recovery.channel
                     )
                 if await self._process_manual_override():
+                    continue
+                if not await self._process_session_schedule():
                     continue
                 mid_price = order_book.mid_price()
                 spread = order_book.spread()
