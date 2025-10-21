@@ -5,7 +5,7 @@
 ## Основные компоненты
 
 - `scalp_system.config` — описание конфигурации и загрузчик YAML/JSON.
-- `scalp_system.data` — потоковая подписка на стаканы Тинькофф Инвестиций.
+- `scalp_system.data` — потоковая подписка и DataEngine с TTL-кешем, кольцевыми буферами и ротацией инструментов.
 - `scalp_system.features` — генерация фич из стакана.
 - `scalp_system.ml` — ансамбль моделей (LSTM, GBDT, Transformer, SVM) и формирование сигналов.
 - `scalp_system.risk` — риск-менеджмент и контроль лимитов.

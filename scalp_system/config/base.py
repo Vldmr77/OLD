@@ -19,9 +19,15 @@ class DataFeedConfig:
     production_token: Optional[str] = None
     use_sandbox: bool = True
     instruments: list[str] = field(default_factory=list)
+    monitored_instruments: list[str] = field(default_factory=list)
     depth: int = 20
     candle_interval: str = "1min"
     throttle_rate_limit: float = 0.05
+    current_cache_ttl: float = 60.0
+    current_cache_size: int = 50
+    history_length: int = 30
+    soft_rss_limit_mb: int = 400
+    hard_rss_limit_mb: int = 700
 
 
 @dataclass
@@ -35,10 +41,10 @@ class FeatureConfig:
 
 @dataclass
 class ModelWeights:
-    lstm_ob: float = 0.4
-    gbdt_features: float = 0.3
-    transformer_temporal: float = 0.2
-    svm_volatility: float = 0.1
+    lstm_ob: float = 0.35
+    gbdt_features: float = 0.25
+    transformer_temporal: float = 0.25
+    svm_volatility: float = 0.15
 
     def normalise(self) -> None:
         total = self.lstm_ob + self.gbdt_features + self.transformer_temporal + self.svm_volatility

@@ -9,7 +9,8 @@ from typing import Callable, Iterable
 
 from .config.base import OrchestratorConfig
 from .config.loader import load_config
-from .data.streams import MarketDataStream, RollingOrderBookBuffer, iterate_stream
+from .data.engine import DataEngine
+from .data.streams import MarketDataStream, iterate_stream
 from .execution.client import BrokerClient
 from .execution.executor import ExecutionEngine
 from .features.pipeline import FeaturePipeline
@@ -35,6 +36,15 @@ class Orchestrator:
             threshold=config.ml.drift_threshold,
             history_path=config.storage.base_path / "drift_metrics.log",
         )
+        self._data_engine = DataEngine(
+            ttl_seconds=config.datafeed.current_cache_ttl,
+            max_instruments=config.datafeed.current_cache_size,
+            history_size=config.datafeed.history_length,
+            monitored_instruments=config.datafeed.monitored_instruments,
+            soft_rss_limit_mb=config.datafeed.soft_rss_limit_mb,
+            hard_rss_limit_mb=config.datafeed.hard_rss_limit_mb,
+        )
+        self._data_engine.update_active_instruments(config.datafeed.instruments)
 
     def _market_stream_factory(self) -> Callable[[], MarketDataStream]:
         token = (
@@ -70,15 +80,19 @@ class Orchestrator:
         return factory
 
     async def run(self) -> None:
-        buffer = RollingOrderBookBuffer(maxlen=self._config.features.lob_levels)
         stream_factory = self._market_stream_factory()
         broker_factory = self._broker_factory()
+        rotation_counter = 0
         async for order_book in iterate_stream(stream_factory):
-            buffer.append(order_book)
-            if not buffer.is_ready():
+            self._data_engine.ingest_order_book(order_book)
+            window = self._data_engine.last_window(
+                order_book.figi, self._config.features.rolling_window
+            )
+            if len(window) < 2:
                 continue
             with timed("features", self._metrics.record_latency):
-                features = self._feature_pipeline.transform(buffer.window())
+                market = self._data_engine.market_indicators()
+                features = self._feature_pipeline.transform(window, market=market)
             with timed("ml", self._metrics.record_latency):
                 signals = self._ml_engine.infer([features])
             for signal in signals:
@@ -94,12 +108,17 @@ class Orchestrator:
                     LOGGER.info("Order executed for %s", signal.figi)
                 else:
                     LOGGER.warning("Order not executed: %s", report.reason)
-            drift = self._drift_detector.evaluate(
-                reference=[level.price for level in buffer.window()[0].bids],
-                current=[level.price for level in order_book.bids],
-            )
+            history = self._data_engine.history(order_book.figi)
+            reference = [level.price for level in history[0].bids] if len(history) else []
+            current = [level.price for level in order_book.bids]
+            drift = self._drift_detector.evaluate(reference=reference, current=current)
             if drift.triggered:
                 LOGGER.warning("Data drift detected p=%.4f mean_diff=%.4f", drift.p_value, drift.mean_diff)
+            rotation_counter += 1
+            if rotation_counter % 50 == 0:
+                replacements = self._data_engine.rotate_instruments()
+                if replacements:
+                    LOGGER.info("Rotated instruments: %s", replacements)
 
 
 def run_from_yaml(path: str | Path) -> None:
