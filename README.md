@@ -11,6 +11,7 @@
 - `scalp_system.risk` — риск-менеджмент и контроль лимитов.
 - `scalp_system.execution` — исполнение заявок через API брокера.
 - `scalp_system.monitoring` — детектор дрейфа и метрики.
+- `scalp_system.ml.calibration` — постановка задач калибровки моделей.
 - `scalp_system.storage` — SQLite репозиторий для логирования сигналов.
 
 ## Запуск
@@ -27,3 +28,8 @@ python -m scalp_system config.example.yaml
 - `python init_config.py --env production`
 - `python model_trainer.py calibrate --days 30`
 - `python health_check.py --config config.example.yaml`
+
+## Мониторинг и калибровка
+
+- Метрики дрейфа сохраняются в `runtime/drift_metrics/drift_metrics_YYYYMMDD.jsonl`.
+- Триггеры на калибровку пишутся в `runtime/calibration_queue.jsonl` с дедупликацией.

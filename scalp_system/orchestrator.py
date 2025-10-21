@@ -15,6 +15,7 @@ from .execution.client import BrokerClient
 from .execution.executor import ExecutionEngine
 from .features.pipeline import FeaturePipeline
 from .ml.engine import MLEngine
+from .ml.calibration import CalibrationCoordinator
 from .monitoring.drift import DriftDetector
 from .monitoring.metrics import MetricsRegistry
 from .risk.engine import RiskEngine
@@ -34,7 +35,7 @@ class Orchestrator:
         self._repository = SQLiteRepository(config.storage.base_path / "signals.db")
         self._drift_detector = DriftDetector(
             threshold=config.ml.drift_threshold,
-            history_path=config.storage.base_path / "drift_metrics.log",
+            history_dir=config.storage.base_path / "drift_metrics",
         )
         self._data_engine = DataEngine(
             ttl_seconds=config.datafeed.current_cache_ttl,
@@ -45,6 +46,9 @@ class Orchestrator:
             hard_rss_limit_mb=config.datafeed.hard_rss_limit_mb,
         )
         self._data_engine.update_active_instruments(config.datafeed.instruments)
+        self._calibration = CalibrationCoordinator(
+            queue_path=config.storage.base_path / "calibration_queue.jsonl"
+        )
 
     def _market_stream_factory(self) -> Callable[[], MarketDataStream]:
         token = (
@@ -112,13 +116,31 @@ class Orchestrator:
             reference = [level.price for level in history[0].bids] if len(history) else []
             current = [level.price for level in order_book.bids]
             drift = self._drift_detector.evaluate(reference=reference, current=current)
+            self._risk_engine.record_drift(drift)
             if drift.triggered:
                 LOGGER.warning("Data drift detected p=%.4f mean_diff=%.4f", drift.p_value, drift.mean_diff)
+            if drift.alert:
+                LOGGER.error("Drift alert severity=%s halting trading", drift.severity)
             rotation_counter += 1
             if rotation_counter % 50 == 0:
                 replacements = self._data_engine.rotate_instruments()
                 if replacements:
                     LOGGER.info("Rotated instruments: %s", replacements)
+            if self._risk_engine.calibration_required():
+                enqueued = self._calibration.enqueue(
+                    reason="drift",
+                    metadata={
+                        "figi": order_book.figi,
+                        "p_value": drift.p_value,
+                        "mean_diff": drift.mean_diff,
+                        "sigma": drift.sigma,
+                        "severity": drift.severity,
+                    },
+                    dedupe_key=f"drift:{order_book.figi}:{drift.severity}",
+                )
+                if enqueued:
+                    LOGGER.info("Calibration request enqueued for %s", order_book.figi)
+                    self._risk_engine.acknowledge_calibration()
 
 
 def run_from_yaml(path: str | Path) -> None:

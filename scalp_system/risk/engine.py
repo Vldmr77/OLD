@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Dict
+from datetime import datetime, timedelta
+from typing import Dict, Optional
 
 from ..config.base import RiskLimits
 from ..ml.engine import MLSignal
+from ..monitoring.drift import DriftReport
 
 
 @dataclass
@@ -31,8 +32,14 @@ class RiskEngine:
         self._positions: Dict[str, Position] = {}
         self._order_count: int = 0
         self._last_reset = datetime.utcnow()
+        self._last_drift: Optional[DriftReport] = None
+        self._halt_trading = False
+        self._calibration_required = False
+        self._calibration_expiry: Optional[datetime] = None
 
     def evaluate_signal(self, signal: MLSignal, price: float) -> bool:
+        if self._halt_trading:
+            return False
         position = self._positions.get(signal.figi, Position(figi=signal.figi))
         projected_qty = position.quantity + signal.direction
         if abs(projected_qty) > self._limits.max_position:
@@ -83,6 +90,33 @@ class RiskEngine:
             gross_exposure=gross,
             var_value=var_value,
         )
+
+    def record_drift(self, report: DriftReport) -> None:
+        self._last_drift = report
+        if report.alert:
+            self._halt_trading = True
+        elif report.calibrate:
+            self._calibration_required = True
+            self._calibration_expiry = datetime.utcnow() + timedelta(minutes=15)
+
+    def calibration_required(self) -> bool:
+        if not self._calibration_required:
+            return False
+        if self._calibration_expiry and datetime.utcnow() > self._calibration_expiry:
+            self._calibration_required = False
+            self._calibration_expiry = None
+            return False
+        return True
+
+    def acknowledge_calibration(self) -> None:
+        self._calibration_required = False
+        self._calibration_expiry = None
+
+    def last_drift(self) -> Optional[DriftReport]:
+        return self._last_drift
+
+    def trading_halted(self) -> bool:
+        return self._halt_trading
 
 
 __all__ = ["RiskEngine", "RiskMetrics", "Position"]

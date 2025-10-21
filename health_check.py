@@ -5,12 +5,16 @@ import argparse
 from pathlib import Path
 
 from scalp_system.config.loader import load_config
+from scalp_system.ml.calibration import CalibrationCoordinator
+from scalp_system.monitoring.drift import DriftDetector
 from scalp_system.storage.repository import SQLiteRepository
 
 
 def run_health_checks(config_path: Path) -> None:
     config = load_config(config_path)
     SQLiteRepository(config.storage.base_path / "health_check.db")
+    DriftDetector(threshold=config.ml.drift_threshold, history_dir=config.storage.base_path / "drift_metrics")
+    CalibrationCoordinator(queue_path=config.storage.base_path / "calibration_queue.jsonl")
     print("OK")
 
 
