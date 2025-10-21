@@ -5,6 +5,7 @@ from pathlib import Path
 
 try:  # pragma: no cover - guard for script execution
     from scalp_system.config import DEFAULT_CONFIG_PATH
+    from scalp_system.config.token_prompt import ensure_tokens_present
     from scalp_system.orchestrator import run_from_yaml
 except ModuleNotFoundError:  # running as `python scalp_system/__main__.py`
     import sys
@@ -14,6 +15,7 @@ except ModuleNotFoundError:  # running as `python scalp_system/__main__.py`
         sys.path.insert(0, str(PACKAGE_ROOT))
 
     from scalp_system.config import DEFAULT_CONFIG_PATH
+    from scalp_system.config.token_prompt import ensure_tokens_present
     from scalp_system.orchestrator import run_from_yaml
 
 
@@ -27,7 +29,8 @@ def main() -> None:
         help="Path to YAML configuration (defaults to packaged example)",
     )
     args = parser.parse_args()
-    run_from_yaml(args.config)
+    config_path = ensure_tokens_present(args.config)
+    run_from_yaml(config_path)
 
 
 if __name__ == "__main__":
