@@ -51,3 +51,9 @@ training:
   min_samples: 10
   enable_quantization: true
   quantization_int8_threshold: 0.5
+backtest:
+  dataset_path: ./data/backtest.jsonl
+  initial_capital: 250000.0
+  transaction_cost_bps: 0.8
+  slippage_bps: 0.5
+  max_orders: 500

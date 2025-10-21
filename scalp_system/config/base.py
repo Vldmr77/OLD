@@ -140,6 +140,28 @@ class TrainingConfig:
 
 
 @dataclass
+class BacktestConfig:
+    dataset_path: Path = Path("./data/backtest.jsonl")
+    initial_capital: float = 100000.0
+    transaction_cost_bps: float = 1.0
+    slippage_bps: float = 0.5
+    max_orders: int = 1000
+
+    def ensure(self) -> None:
+        if not isinstance(self.dataset_path, Path):
+            self.dataset_path = Path(self.dataset_path).expanduser()
+        self.dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.initial_capital <= 0:
+            self.initial_capital = 10000.0
+        if self.transaction_cost_bps < 0:
+            self.transaction_cost_bps = 0.0
+        if self.slippage_bps < 0:
+            self.slippage_bps = 0.0
+        if self.max_orders <= 0:
+            self.max_orders = 100
+
+
+@dataclass
 class OrchestratorConfig:
     environment: str = "development"
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -152,17 +174,20 @@ class OrchestratorConfig:
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    backtest: BacktestConfig = field(default_factory=BacktestConfig)
 
     def __post_init__(self) -> None:
         self.storage.ensure()
         self.ml.weights.normalise()
         self.training.ensure()
+        self.backtest.ensure()
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
         monitoring_data = _ensure_dict(data.get("monitoring", {}))
         security_data = _ensure_dict(data.get("security", {}))
         training_data = _ensure_dict(data.get("training", {}))
+        backtest_data = _ensure_dict(data.get("backtest", {}))
         encryption_value = security_data.get("encryption_key_path")
         return cls(
             environment=data.get("environment", "development"),
@@ -191,6 +216,13 @@ class OrchestratorConfig:
                 min_samples=training_data.get("min_samples", 10),
                 enable_quantization=training_data.get("enable_quantization", True),
                 quantization_int8_threshold=training_data.get("quantization_int8_threshold", 0.5),
+            ),
+            backtest=BacktestConfig(
+                dataset_path=_to_path(backtest_data.get("dataset_path", Path("./data/backtest.jsonl"))),
+                initial_capital=backtest_data.get("initial_capital", 100000.0),
+                transaction_cost_bps=backtest_data.get("transaction_cost_bps", 1.0),
+                slippage_bps=backtest_data.get("slippage_bps", 0.5),
+                max_orders=backtest_data.get("max_orders", 1000),
             ),
         )
 
@@ -237,5 +269,6 @@ __all__ = [
     "MonitoringConfig",
     "SecurityConfig",
     "TrainingConfig",
+    "BacktestConfig",
     "OrchestratorConfig",
 ]

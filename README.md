@@ -43,12 +43,19 @@ print(key.serialise())
 - `python -m scalp_system.cli.model_trainer calibrate --config config.example.yaml`
 - `python -m scalp_system.cli.model_trainer train --dataset data/training.jsonl --output runtime/models`
 - `python -m scalp_system.cli.health_check --config config.example.yaml`
+- `python -m scalp_system.cli.backtest config.example.yaml --dataset data/backtest.jsonl --output runtime/reports/backtest.json`
 
 Секция `training` конфигурации описывает путь до JSONL-датасета с историческими примерами,
 параметры обучения (число эпох, скорость обучения, размер валидационной выборки) и место
 сохранения артефактов. Команда `train` формирует файл `ensemble_weights.json` в указанной
 директории, создает отчёт `*.training.json` с метриками и генерирует план квантования
 `quantization_plan.json` (INT8 для весов выше порога, FLOAT16 для остальных моделей).
+
+Секция `backtest` задаёт набор параметров для оффлайн-проверок стратегии: путь до
+исторического JSONL с ордербуками, стартовый капитал, допущения по комиссионным и лимит
+на количество симулированных заявок. CLI-команда `backtest` читает указанный датасет,
+генерирует фичи/сигналы теми же пайплайнами, что и боевая система, и сохраняет JSON-отчёт
+с PnL, долей прибыльных сделок и эквити-кривой.
 
 ## Мониторинг и калибровка
 
