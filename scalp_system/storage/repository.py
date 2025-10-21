@@ -105,6 +105,27 @@ class SQLiteRepository:
             )
         return results
 
+    def summary(self) -> dict:
+        """Return lightweight statistics for UI consumption."""
+
+        with self._connection() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM signals").fetchone()[0]
+            latest = conn.execute(
+                "SELECT figi, direction, confidence, created_at FROM signals ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        summary = {"total_signals": int(total)}
+        if latest:
+            figi, direction, confidence, created_at = latest
+            summary["latest"] = {
+                "figi": str(figi),
+                "direction": int(direction),
+                "confidence": float(confidence),
+                "timestamp": self._parse_timestamp(created_at).isoformat(),
+            }
+        else:
+            summary["latest"] = None
+        return summary
+
     def _record_cache(self, record: dict) -> None:
         self._cache_buffer.append(record)
         now = time.monotonic()

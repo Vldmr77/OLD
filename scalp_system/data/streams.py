@@ -9,14 +9,14 @@ from datetime import datetime, timezone
 from typing import AsyncIterator, Awaitable, Callable, Deque, Iterable, Optional
 
 from .models import OrderBook, OrderBookLevel
+from ..broker.tinkoff import ensure_sdk_available, open_async_client
 
 LOGGER = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
-    from tinkoff.invest import AsyncClient, OrderBookInstrument, SubscribeOrderBookRequest
+    from tinkoff.invest import OrderBookInstrument, SubscribeOrderBookRequest
     from tinkoff.invest.async_services import AsyncMarketDataStreamService
 except ImportError:  # pragma: no cover
-    AsyncClient = None  # type: ignore
     OrderBookInstrument = None  # type: ignore
     SubscribeOrderBookRequest = None  # type: ignore
     AsyncMarketDataStreamService = None  # type: ignore
@@ -34,20 +34,19 @@ class MarketDataStream:
         depth: int,
         reconnect_backoff: float = 1.0,
     ) -> None:
-        if AsyncClient is None:
-            raise RuntimeError("tinkoff-investments SDK is required for market data streaming")
+        ensure_sdk_available()
         self._token = token
         self._use_sandbox = use_sandbox
         self._instruments = list(instruments)
         self._depth = depth
         self._reconnect_backoff = reconnect_backoff
-        self._client: Optional[AsyncClient] = None
+        self._client_cm = None
+        self._client = None
         self._stream: Optional[AsyncMarketDataStreamService] = None
 
     async def __aenter__(self) -> "MarketDataStream":
-        assert AsyncClient is not None
-        target = "sandbox" if self._use_sandbox else None
-        self._client = AsyncClient(self._token, target=target)
+        self._client_cm = open_async_client(self._token, use_sandbox=self._use_sandbox)
+        self._client = await self._client_cm.__aenter__()
         self._stream = self._client.create_market_data_stream()
         await self._subscribe_order_book()
         return self
@@ -55,8 +54,10 @@ class MarketDataStream:
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._stream:
             await self._stream.close()
-        if self._client:
-            await self._client.close()
+        if self._client_cm is not None:
+            await self._client_cm.__aexit__(exc_type, exc, tb)
+        self._client = None
+        self._client_cm = None
 
     async def _subscribe_order_book(self) -> None:
         assert self._stream is not None and OrderBookInstrument is not None and SubscribeOrderBookRequest is not None

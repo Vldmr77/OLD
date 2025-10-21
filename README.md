@@ -12,6 +12,7 @@
 - `scalp_system.ml.training` — оффлайн-тренировка ансамбля и подготовка весов моделей.
 - `scalp_system.risk` — риск-менеджмент и контроль лимитов.
 - `scalp_system.execution` — исполнение заявок через API брокера.
+- `scalp_system.broker` — вспомогательные обёртки над tinkoff-investments SDK.
 - `scalp_system.monitoring` — детектор дрейфа и метрики.
 - `scalp_system.monitoring.audit` — аудит действий в формате W3C.
 - `scalp_system.monitoring.resource` — контроль загрузки CPU/GPU/памяти.
@@ -19,6 +20,7 @@
 - `scalp_system.monitoring.reporting` — формирование периодических отчётов по результатам.
 - `scalp_system.ml.calibration` — постановка задач калибровки моделей.
 - `scalp_system.storage` — SQLite репозиторий для логирования сигналов.
+- `scalp_system.ui` — лёгкий встроенный HTTP-дэшборд для просмотра сигналов и состояний.
 - `scalp_system.storage.disaster_recovery` — резервные копии критичных артефактов.
 - `scalp_system.utils.integrity` — проверки целостности данных при переподключении.
 - `scalp_system.security` — менеджер ключей шифрования токенов.
@@ -32,6 +34,19 @@ python -m scalp_system config.example.yaml
 
 При отсутствии поддержки YAML можно использовать JSON-конфигурацию (`config.json`).
 
+### Работа с tinkoff-investments SDK
+
+Для подписки на рыночные данные и отправки заявок используется официальный SDK. Репозиторий содержит
+подписанную версию `tinkoff_investments-0.2.0b117-py3-none-any.whl`. Установите её перед запуском:
+
+```bash
+pip install --no-index tinkoff_investments-0.2.0b117-py3-none-any.whl
+```
+
+После установки доступны высокоуровневые обёртки `scalp_system.broker.TinkoffAPI`, а также
+`MarketDataStream` и `BrokerClient`, которые используются оркестратором и тестами. При отсутствии SDK
+будет выброшено понятное исключение с подсказкой по установке.
+
 Для работы с зашифрованными токенами укажите путь к Fernet-ключу в секции `security`,
 а сами значения пометьте префиксом `enc:`. Ключ можно создать командой:
 
@@ -40,6 +55,20 @@ from scalp_system.security import KeyManager
 key = KeyManager.generate()
 print(key.serialise())
 ```
+
+### UI-дэшборд
+
+Для оперативного контроля состояния реализован лёгкий HTTP-дэшборд без внешних зависимостей. Он читает данные из SQLite
+репозитория сигналов и отображает последние записи, а также агрегированную статистику.
+
+Запуск с использованием CLI:
+
+```bash
+python -m scalp_system.cli.dashboard --repository ./runtime/signals.sqlite3 --host 0.0.0.0 --port 8000
+```
+
+После запуска перейдите в браузере по адресу `http://<host>:<port>/`, чтобы увидеть таблицу сигналов и
+резюме. Для интеграции в инфраструктуру дэшборд можно запускать в отдельном процессе либо контейнере.
 
 ## Дополнительные утилиты
 

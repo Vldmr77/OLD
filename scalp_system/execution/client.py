@@ -8,11 +8,12 @@ from typing import Optional
 LOGGER = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
-    from tinkoff.invest import AsyncClient, OrderDirection, OrderType
+    from tinkoff.invest import OrderDirection, OrderType
 except ImportError:  # pragma: no cover
-    AsyncClient = None  # type: ignore
     OrderDirection = None  # type: ignore
     OrderType = None  # type: ignore
+
+from ..broker.tinkoff import ensure_sdk_available, open_async_client
 
 
 @dataclass
@@ -27,22 +28,23 @@ class OrderRequest:
 
 class BrokerClient:
     def __init__(self, token: str, *, sandbox: bool, account_id: Optional[str] = None) -> None:
-        if AsyncClient is None:
-            raise RuntimeError("tinkoff-investments SDK is required for order execution")
+        ensure_sdk_available()
         self._token = token
         self._sandbox = sandbox
         self._account_id = account_id
-        self._client: Optional[AsyncClient] = None
+        self._client_cm = None
+        self._client = None
 
     async def __aenter__(self) -> "BrokerClient":
-        assert AsyncClient is not None
-        target = "sandbox" if self._sandbox else None
-        self._client = AsyncClient(self._token, target=target)
+        self._client_cm = open_async_client(self._token, use_sandbox=self._sandbox)
+        self._client = await self._client_cm.__aenter__()
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
-        if self._client:
-            await self._client.close()
+        if self._client_cm is not None:
+            await self._client_cm.__aexit__(exc_type, exc, tb)
+        self._client = None
+        self._client_cm = None
 
     async def place_order(self, order: OrderRequest) -> None:
         if not self._client:
