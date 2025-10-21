@@ -163,6 +163,21 @@ class SystemConfig:
 
 
 @dataclass
+class ReportingConfig:
+    enabled: bool = True
+    interval_minutes: int = 60
+    max_history_days: int = 14
+    report_path: Path = Path("./runtime/reports/performance.jsonl")
+
+    def ensure(self) -> None:
+        if not isinstance(self.report_path, Path):
+            self.report_path = Path(self.report_path).expanduser()
+        self.report_path.parent.mkdir(parents=True, exist_ok=True)
+        self.interval_minutes = max(1, int(self.interval_minutes))
+        self.max_history_days = max(1, int(self.max_history_days))
+
+
+@dataclass
 class TrainingConfig:
     dataset_path: Path = Path("./data/training.jsonl")
     output_dir: Path = Path("./models")
@@ -217,6 +232,7 @@ class OrchestratorConfig:
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
+    reporting: ReportingConfig = field(default_factory=ReportingConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
     system: SystemConfig = field(default_factory=SystemConfig)
@@ -227,6 +243,7 @@ class OrchestratorConfig:
         self.training.ensure()
         self.backtest.ensure()
         self.system.ensure()
+        self.reporting.ensure()
 
     @classmethod
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
@@ -236,6 +253,7 @@ class OrchestratorConfig:
         training_data = _ensure_dict(data.get("training", {}))
         backtest_data = _ensure_dict(data.get("backtest", {}))
         system_data = _ensure_dict(data.get("system", {}))
+        reporting_data = _ensure_dict(data.get("reporting", {}))
         encryption_value = security_data.get("encryption_key_path")
         return cls(
             environment=data.get("environment", "development"),
@@ -256,6 +274,16 @@ class OrchestratorConfig:
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
             ),
             notifications=NotificationConfig(**notifications_data),
+            reporting=ReportingConfig(
+                enabled=reporting_data.get("enabled", True),
+                interval_minutes=reporting_data.get("interval_minutes", 60),
+                max_history_days=reporting_data.get("max_history_days", 14),
+                report_path=_to_path(
+                    reporting_data.get(
+                        "report_path", Path("./runtime/reports/performance.jsonl")
+                    )
+                ),
+            ),
             training=TrainingConfig(
                 dataset_path=_to_path(training_data.get("dataset_path", Path("./data/training.jsonl"))),
                 output_dir=_to_path(training_data.get("output_dir", Path("./models"))),
@@ -326,6 +354,7 @@ __all__ = [
     "NotificationConfig",
     "SecurityConfig",
     "SystemConfig",
+    "ReportingConfig",
     "TrainingConfig",
     "BacktestConfig",
     "OrchestratorConfig",

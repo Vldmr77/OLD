@@ -95,3 +95,33 @@ def test_latency_notification_bypasses_cooldown_for_critical():
     )
 
     assert len(calls) == 2
+
+
+def test_performance_summary_formats_payload():
+    captured = {}
+
+    def fake_http(url: str, data: bytes) -> None:
+        captured["data"] = data
+
+    dispatcher = NotificationDispatcher(
+        NotificationConfig(
+            telegram_bot_token="token",
+            telegram_chat_id="chat",
+            cooldown_seconds=0,
+        ),
+        http_sender=fake_http,
+        sound_player=lambda *args, **kwargs: None,
+    )
+
+    asyncio.run(
+        dispatcher.notify_performance_summary(
+            realized_pnl=1234.5,
+            signal_count=42,
+            avg_confidence=0.678,
+            halted=False,
+        )
+    )
+
+    payload = parse_qs(captured["data"].decode("utf-8"))
+    assert "PERFORMANCE" in payload["text"][0]
+    assert "state=ACTIVE" in payload["text"][0]

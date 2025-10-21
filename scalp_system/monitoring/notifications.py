@@ -85,6 +85,26 @@ class NotificationDispatcher:
             cooldown_override=0 if severity == "critical" else None,
         )
 
+    async def notify_performance_summary(
+        self,
+        *,
+        realized_pnl: float,
+        signal_count: int,
+        avg_confidence: float,
+        halted: bool,
+    ) -> bool:
+        status = "HALTED" if halted else "ACTIVE"
+        message = (
+            "PERFORMANCE "
+            f"pnl={realized_pnl:.2f} signals={signal_count} avg_conf={avg_confidence:.3f} "
+            f"state={status}"
+        )
+        return await self._dispatch(
+            key="performance",
+            message=message,
+            cooldown_override=self.config.cooldown_seconds,
+        )
+
     async def _dispatch(
         self,
         *,

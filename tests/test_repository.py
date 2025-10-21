@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -57,3 +58,26 @@ def test_repository_dynamic_interval_adapts(tmp_path, monkeypatch):
     assert repo._cache_interval <= initial_interval
     assert repo._cache_interval >= repo._min_cache_interval
     assert repo._cache_interval <= repo._max_cache_interval
+
+
+def test_fetch_signals_returns_recent(tmp_path):
+    repo = SQLiteRepository(tmp_path / "signals.db")
+    repo.persist_signal("AAA", 1, 0.9)
+    repo.persist_signal("BBB", -1, 0.4)
+    records = repo.fetch_signals()
+    assert len(records) == 2
+    assert records[0]["timestamp"].tzinfo is timezone.utc
+    assert {record["figi"] for record in records} == {"AAA", "BBB"}
+
+
+def test_fetch_signals_filters_by_since(tmp_path):
+    repo = SQLiteRepository(tmp_path / "signals.db")
+    repo.persist_signal("AAA", 1, 0.9)
+    with sqlite3.connect(tmp_path / "signals.db") as conn:
+        conn.execute("UPDATE signals SET created_at = datetime('now', '-2 day') WHERE figi = ?", ("AAA",))
+        conn.commit()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=1)
+    repo.persist_signal("BBB", -1, 0.4)
+    recent = repo.fetch_signals(since=cutoff)
+    assert len(recent) == 1
+    assert recent[0]["figi"] == "BBB"

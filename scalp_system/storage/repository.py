@@ -75,6 +75,36 @@ class SQLiteRepository:
             return
         self._record_cache(record)
 
+    def fetch_signals(
+        self,
+        *,
+        limit: Optional[int] = None,
+        since: Optional[datetime] = None,
+    ) -> List[dict]:
+        query = "SELECT figi, direction, confidence, created_at FROM signals"
+        params: List[object] = []
+        if since is not None:
+            query += " WHERE datetime(created_at) >= datetime(?)"
+            params.append(since.isoformat())
+        query += " ORDER BY datetime(created_at) DESC"
+        if limit is not None:
+            query += " LIMIT ?"
+            params.append(int(limit))
+        with self._connection() as conn:
+            rows = conn.execute(query, params).fetchall()
+        results = []
+        for figi, direction, confidence, created_at in rows:
+            timestamp = self._parse_timestamp(created_at)
+            results.append(
+                {
+                    "figi": str(figi),
+                    "direction": int(direction),
+                    "confidence": float(confidence),
+                    "timestamp": timestamp,
+                }
+            )
+        return results
+
     def _record_cache(self, record: dict) -> None:
         self._cache_buffer.append(record)
         now = time.monotonic()
@@ -117,6 +147,21 @@ class SQLiteRepository:
         target_interval = suggested / buffer_ratio
         target_interval = max(self._min_cache_interval, min(self._max_cache_interval, target_interval))
         self._cache_interval = target_interval
+
+    @staticmethod
+    def _parse_timestamp(value: object) -> datetime:
+        if isinstance(value, datetime):
+            return value.replace(tzinfo=value.tzinfo or timezone.utc)
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value).replace(tzinfo=timezone.utc)
+            except ValueError:
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").replace(
+                    tzinfo=timezone.utc
+                )
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(float(value), tz=timezone.utc)
+        return datetime.now(timezone.utc)
 
 
 __all__ = ["SQLiteRepository"]

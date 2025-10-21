@@ -268,5 +268,13 @@ class RiskEngine:
             else None
         )
 
+    def performance_snapshot(self) -> dict:
+        return {
+            "realized_pnl": self._realized_pnl,
+            "consecutive_losses": self._consecutive_losses,
+            "daily_loss_triggered": self._daily_loss_triggered,
+            "halt_trading": self._halt_trading,
+        }
+
 
 __all__ = ["RiskEngine", "RiskMetrics", "Position"]

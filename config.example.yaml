@@ -60,6 +60,11 @@ notifications:
   enable_sound_alerts: false
   liquidity_spread_threshold_bps: 5.0
   cooldown_seconds: 30
+reporting:
+  enabled: true
+  interval_minutes: 60
+  max_history_days: 14
+  report_path: ./runtime/reports/performance.jsonl
 training:
   dataset_path: ./data/training.jsonl
   output_dir: ./models

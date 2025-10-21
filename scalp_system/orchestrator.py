@@ -24,6 +24,7 @@ from .monitoring.drift import DriftDetector
 from .monitoring.latency import LatencyAlert, LatencyMonitor
 from .monitoring.metrics import MetricsRegistry
 from .monitoring.notifications import NotificationDispatcher
+from .monitoring.reporting import PerformanceReporter
 from .monitoring.resource import ResourceMonitor
 from .risk.engine import RiskEngine
 from .security import KeyManager
@@ -95,6 +96,15 @@ class Orchestrator:
             LOGGER.exception("Failed to load encryption key")
             self._key_manager = None
         self._restore_from_checkpoint()
+        self._performance_reporter = PerformanceReporter(
+            repository=self._repository,
+            risk_engine=self._risk_engine,
+            report_path=config.reporting.report_path,
+            interval_minutes=config.reporting.interval_minutes,
+            max_history_days=config.reporting.max_history_days,
+            enabled=config.reporting.enabled,
+            notifications=self._notifications,
+        )
 
     def _market_stream_factory(self) -> Callable[[], MarketDataStream]:
         token = (
@@ -345,6 +355,7 @@ class Orchestrator:
                 if enqueued:
                     LOGGER.info("Calibration request enqueued for %s", order_book.figi)
                     self._risk_engine.acknowledge_calibration()
+            await self._performance_reporter.maybe_emit()
         finally:
             if self._checkpoint_task:
                 self._checkpoint_task.cancel()
@@ -352,6 +363,7 @@ class Orchestrator:
                     await self._checkpoint_task
             await self._process_latency_alerts()
             await self._persist_checkpoint()
+            await self._performance_reporter.maybe_emit()
 
     def reload_models(self, model_dir: Path) -> None:
         """Reload quantised models and clear cached feature state."""
