@@ -38,9 +38,9 @@ print(key.serialise())
 
 ## Дополнительные утилиты
 
-- `python init_config.py --env production`
-- `python model_trainer.py calibrate --days 30`
-- `python health_check.py --config config.example.yaml`
+- `python -m scalp_system.cli.init_config --env production`
+- `python -m scalp_system.cli.model_trainer calibrate --days 30`
+- `python -m scalp_system.cli.health_check --config config.example.yaml`
 
 ## Мониторинг и калибровка
 
