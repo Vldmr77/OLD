@@ -21,6 +21,7 @@ class DataFeedConfig:
     sandbox_token: Optional[str] = None
     production_token: Optional[str] = None
     use_sandbox: bool = True
+    allow_tokenless: bool = True
     instruments: list[str] = field(default_factory=list)
     monitored_instruments: list[str] = field(default_factory=list)
     depth: int = 20
@@ -42,6 +43,7 @@ class DataFeedConfig:
         self.current_cache_size = max(self.current_cache_size, self.max_active_instruments)
         self.history_length = max(1, int(self.history_length))
         self.max_active_instruments = max(1, int(self.max_active_instruments))
+        self.allow_tokenless = bool(self.allow_tokenless)
         self.monitor_pool_size = max(
             self.max_active_instruments, int(self.monitor_pool_size or self.max_active_instruments)
         )

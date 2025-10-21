@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
+import random
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable, Deque, Iterable, Optional
 
 from .models import OrderBook, OrderBookLevel
@@ -147,4 +150,131 @@ async def _maybe_await(callback, *args):
         await result
 
 
-__all__ = ["MarketDataStream", "RollingOrderBookBuffer", "iterate_stream"]
+class OfflineMarketDataStream:
+    """Synthetic stream used when broker tokens are unavailable."""
+
+    def __init__(
+        self,
+        *,
+        instruments: Iterable[str],
+        depth: int,
+        dataset_path: Path | None = None,
+        interval: float = 0.5,
+    ) -> None:
+        self._instruments = list(instruments) or ["DEMO_FIGI"]
+        self._depth = max(1, int(depth))
+        self._dataset_path = Path(dataset_path) if dataset_path else None
+        self._interval = max(0.0, float(interval))
+        self._rng = random.Random(42)
+        self._books_cache: Optional[list[OrderBook]] = None
+
+    async def __aenter__(self) -> "OfflineMarketDataStream":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:
+        self._books_cache = None
+
+    async def order_books(self) -> AsyncIterator[OrderBook]:
+        if self._dataset_path and self._dataset_path.exists():
+            books = self._load_dataset()
+            if books:
+                while True:
+                    for book in books:
+                        yield book
+                        if self._interval:
+                            await asyncio.sleep(self._interval)
+                    if self._interval:
+                        await asyncio.sleep(self._interval)
+        while True:
+            for figi in self._instruments:
+                yield self._synthetic_book(figi)
+                if self._interval:
+                    await asyncio.sleep(self._interval)
+
+    def _load_dataset(self) -> list[OrderBook]:
+        if self._books_cache is not None:
+            return self._books_cache
+        books: list[OrderBook] = []
+        if not self._dataset_path or not self._dataset_path.exists():
+            self._books_cache = []
+            return self._books_cache
+        with self._dataset_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payload = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                book = self._parse_payload(payload)
+                if book is not None:
+                    books.append(book)
+        self._books_cache = books
+        return books
+
+    def _synthetic_book(self, figi: str) -> OrderBook:
+        base = 90.0 + (self._rng.random() * 20.0)
+        timestamp = datetime.utcnow().replace(tzinfo=timezone.utc)
+        tick_size = max(0.01, base * 0.0005)
+        bids = []
+        asks = []
+        mid_price = base * (1 + self._rng.uniform(-0.005, 0.005))
+        for level in range(self._depth):
+            offset = tick_size * (level + 1)
+            quantity = max(1.0, self._rng.uniform(10.0, 50.0))
+            bids.append(OrderBookLevel(price=mid_price - offset, quantity=quantity))
+            asks.append(OrderBookLevel(price=mid_price + offset, quantity=quantity))
+        return OrderBook(
+            figi=figi,
+            timestamp=timestamp,
+            bids=tuple(bids),
+            asks=tuple(asks),
+            depth=self._depth,
+        )
+
+    def _parse_payload(self, payload: dict[str, object]) -> Optional[OrderBook]:
+        figi = payload.get("figi")
+        bids = payload.get("bids")
+        asks = payload.get("asks")
+        timestamp_raw = payload.get("timestamp")
+        if not figi or not isinstance(figi, str) or not bids or not asks or not timestamp_raw:
+            return None
+        try:
+            timestamp = datetime.fromisoformat(str(timestamp_raw))
+        except ValueError:
+            return None
+        bid_levels = []
+        ask_levels = []
+        for price, qty in bids:
+            try:
+                bid_levels.append(
+                    OrderBookLevel(price=float(price), quantity=float(qty))
+                )
+            except (TypeError, ValueError):
+                continue
+        for price, qty in asks:
+            try:
+                ask_levels.append(
+                    OrderBookLevel(price=float(price), quantity=float(qty))
+                )
+            except (TypeError, ValueError):
+                continue
+        if not bid_levels or not ask_levels:
+            return None
+        depth = min(len(bid_levels), len(ask_levels), self._depth)
+        return OrderBook(
+            figi=figi,
+            timestamp=timestamp.replace(tzinfo=timezone.utc),
+            bids=tuple(bid_levels[:depth]),
+            asks=tuple(ask_levels[:depth]),
+            depth=depth,
+        )
+
+
+__all__ = [
+    "MarketDataStream",
+    "OfflineMarketDataStream",
+    "RollingOrderBookBuffer",
+    "iterate_stream",
+]

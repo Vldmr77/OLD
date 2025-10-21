@@ -68,6 +68,7 @@ def test_existing_token_is_preserved(tmp_path, monkeypatch):
         datafeed:
           sandbox_token: "EXISTING"
           use_sandbox: true
+          allow_tokenless: false
         """,
         encoding="utf-8",
     )
@@ -77,3 +78,23 @@ def test_existing_token_is_preserved(tmp_path, monkeypatch):
 
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert data["datafeed"]["sandbox_token"] == "EXISTING"
+
+
+@pytest.mark.skipif(yaml is None, reason="PyYAML is required for token prompt tests")
+def test_allow_tokenless_skips_prompt(tmp_path, monkeypatch):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+        datafeed:
+          sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
+          use_sandbox: true
+          allow_tokenless: true
+        """,
+        encoding="utf-8",
+    )
+    monkeypatch.delenv("TINKOFF_SANDBOX_TOKEN", raising=False)
+
+    ensure_tokens_present(config_path)
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert data["datafeed"]["sandbox_token"] is None

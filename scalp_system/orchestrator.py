@@ -20,7 +20,7 @@ from .config.loader import load_config
 from .control.manual_override import ManualOverrideGuard
 from .control.session import SessionGuard
 from .data.engine import DataEngine
-from .data.streams import MarketDataStream, iterate_stream
+from .data.streams import MarketDataStream, OfflineMarketDataStream, iterate_stream
 from .execution.client import BrokerClient
 from .execution.executor import ExecutionEngine
 from .features.pipeline import FeaturePipeline
@@ -44,6 +44,7 @@ from .storage.disaster_recovery import DisasterRecoveryManager
 from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
+from .config.token_prompt import is_placeholder_token
 
 LOGGER = logging.getLogger(__name__)
 
@@ -162,11 +163,29 @@ class Orchestrator:
             if self._config.datafeed.use_sandbox
             else self._config.datafeed.production_token
         )
-        return self._decrypt_token(token)
+        if is_placeholder_token(token):
+            return None
+        decrypted = self._decrypt_token(token)
+        if is_placeholder_token(decrypted):
+            return None
+        return decrypted
 
     def _market_stream_factory(self) -> Callable[[], MarketDataStream]:
         if not self._api_token:
-            raise RuntimeError("API token is required")
+            LOGGER.warning(
+                "No API token configured; starting offline market data stream."
+            )
+
+            def factory() -> OfflineMarketDataStream:
+                return OfflineMarketDataStream(
+                    instruments=self._data_engine.active_instruments()
+                    or self._config.datafeed.instruments
+                    or self._config.datafeed.monitored_instruments,
+                    depth=self._config.datafeed.depth,
+                    dataset_path=self._config.backtest.dataset_path,
+                )
+
+            return factory
 
         def factory() -> MarketDataStream:
             return MarketDataStream(
@@ -180,7 +199,29 @@ class Orchestrator:
 
     def _broker_factory(self) -> Callable[[], BrokerClient]:
         if not self._api_token:
-            raise RuntimeError("Broker token is required")
+            if self._config.system.mode == "production":
+                raise RuntimeError("Broker token is required in production mode")
+
+            LOGGER.warning(
+                "No broker token configured; execution will remain in paper mode."
+            )
+
+            class _PaperBroker:
+                async def __aenter__(self_inner):  # pragma: no cover - trivial async context
+                    return self_inner
+
+                async def __aexit__(self_inner, exc_type, exc, tb):  # pragma: no cover
+                    return False
+
+                async def place_order(self_inner, order):  # pragma: no cover - logging only
+                    LOGGER.info(
+                        "Skipping order placement for %s due to missing broker token", order.figi
+                    )
+
+            def factory():  # pragma: no cover - simple stub
+                return _PaperBroker()
+
+            return factory
 
         def factory() -> BrokerClient:
             return BrokerClient(

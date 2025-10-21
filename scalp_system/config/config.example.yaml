@@ -25,6 +25,7 @@ logging:
 datafeed:
   sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
   use_sandbox: true
+  allow_tokenless: true
   instruments:
     - BBG004730ZJ9
     - BBG004731032

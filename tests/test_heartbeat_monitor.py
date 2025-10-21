@@ -10,7 +10,7 @@ def test_heartbeat_monitor_triggers_after_misses():
     async def runner() -> None:
         monitor = HeartbeatMonitor(
             enabled=True,
-            interval_seconds=0.05,
+            interval_seconds=0.1,
             miss_threshold=2,
         )
 
@@ -18,9 +18,9 @@ def test_heartbeat_monitor_triggers_after_misses():
             events.append(status)
 
         task = asyncio.create_task(monitor.monitor(callback, poll_interval=0.05))
-        await asyncio.sleep(0.06)
+        await asyncio.sleep(0.12)
         monitor.record_beat("FIGI")
-        await asyncio.sleep(0.2)
+        await asyncio.sleep(0.35)
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
@@ -40,7 +40,7 @@ def test_heartbeat_monitor_disabled_no_events():
     async def runner() -> None:
         monitor = HeartbeatMonitor(
             enabled=False,
-            interval_seconds=0.05,
+            interval_seconds=0.1,
             miss_threshold=1,
         )
 

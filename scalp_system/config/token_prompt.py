@@ -47,6 +47,7 @@ def ensure_tokens_present(config_path: Path | None) -> Path:
     key_manager = _build_key_manager(security, config_path=path)
 
     use_sandbox = bool(datafeed.get("use_sandbox", True))
+    allow_tokenless = bool(datafeed.get("allow_tokenless", False))
     fields_to_check = []
     if _token_missing(datafeed.get("sandbox_token")):
         fields_to_check.append(("sandbox_token", "sandbox"))
@@ -64,7 +65,7 @@ def ensure_tokens_present(config_path: Path | None) -> Path:
         token = None
         if env_var:
             token = os.getenv(env_var)
-        if not token and field == required_field:
+        if not token and field == required_field and not allow_tokenless:
             token = _prompt_for_token(label)
         if not token:
             # Optional token missing but not provided; skip updating
@@ -73,15 +74,20 @@ def ensure_tokens_present(config_path: Path | None) -> Path:
         datafeed[field] = stored
         updated = True
 
+    required_missing = _token_missing(datafeed.get(required_field))
+    if required_missing:
+        if allow_tokenless:
+            if datafeed.get(required_field) is not None:
+                datafeed[required_field] = None
+                updated = True
+            print("No broker token supplied; continuing in offline mode.")
+        else:
+            raise SystemExit(
+                "Broker token is required. Rerun the command and provide a valid token when prompted."
+            )
+
     if updated:
         _dump_yaml(path, data)
-
-    # If after updating the required token is still missing, abort with instructions
-    required_value = datafeed.get(required_field)
-    if _token_missing(required_value):
-        raise SystemExit(
-            "Broker token is required. Rerun the command and provide a valid token when prompted."
-        )
 
     return path
 
@@ -150,6 +156,12 @@ def _token_missing(raw_value: Any) -> bool:
     return any(value.startswith(prefix) for prefix in _PLACEHOLDER_PREFIXES)
 
 
+def is_placeholder_token(raw_value: Any) -> bool:
+    """Return True when the provided token is effectively missing."""
+
+    return _token_missing(raw_value)
+
+
 def _prompt_for_token(label: str) -> str:
     prompt = f"Enter Tinkoff {label} token: "
     while True:
@@ -177,4 +189,4 @@ def _encode_token(token: str, key_manager: Optional[KeyManager]) -> str:
     return f"enc:{key_manager.encrypt(token)}"
 
 
-__all__ = ["ensure_tokens_present"]
+__all__ = ["ensure_tokens_present", "is_placeholder_token"]
