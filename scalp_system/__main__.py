@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .config import DEFAULT_CONFIG_PATH
-from .orchestrator import run_from_yaml
+from scalp_system.config import DEFAULT_CONFIG_PATH
+from scalp_system.orchestrator import run_from_yaml
 
 
 def main() -> None:

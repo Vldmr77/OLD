@@ -28,7 +28,7 @@
 ## Запуск
 
 ```bash
-python scripts/install_vendor.py  # устанавливает зависимости в scalp_system/vendor
+python scripts/install_vendor.py  # устанавливает минимальные зависимости в scalp_system/vendor
 python scripts/apply_tinkoff_tokens.py --sandbox-token <TOKEN> --production-token <TOKEN>
 python -m scalp_system  # использует пакетный config.example.yaml по умолчанию
 ```
@@ -47,10 +47,11 @@ python -m scalp_system  # использует пакетный config.example.y
 подписанную версию `tinkoff_investments-0.2.0b117-py3-none-any.whl`. Установите её перед запуском:
 
 ```bash
-python scripts/install_vendor.py --no-requirements --target ./scalp_system/vendor
+python scripts/install_vendor.py --include-optional --target ./scalp_system/vendor
 ```
 
-Скрипт установит SDK и зависимости в локальную папку `vendor`, которая автоматически
+Скрипт установит SDK, базовые зависимости и (при указании `--include-optional`) дополнительные
+пакеты для шифрования токенов и мониторинга ресурсов в локальную папку `vendor`, которая автоматически
 подхватывается при импорте пакета. После установки доступны высокоуровневые обёртки
 `scalp_system.broker.TinkoffAPI`, а также `MarketDataStream` и `BrokerClient`, которые
 используются оркестратором и тестами. При отсутствии SDK будет выброшено понятное

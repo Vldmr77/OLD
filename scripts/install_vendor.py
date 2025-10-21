@@ -7,11 +7,20 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable, List
+from typing import Iterable, List, Sequence
 
 DEFAULT_TARGET = Path(__file__).resolve().parents[1] / "scalp_system" / "vendor"
-DEFAULT_REQUIREMENTS = Path(__file__).resolve().parents[1] / "requirements.txt"
 DEFAULT_SDK = Path(__file__).resolve().parents[1] / "tinkoff_investments-0.2.0b117-py3-none-any.whl"
+
+# Essential dependencies required for the runtime to start.
+CORE_REQUIREMENTS: Sequence[str] = ("PyYAML>=6.0",)
+
+# Optional extras that provide enhanced functionality but are not mandatory for
+# a smoke run of the system.
+OPTIONAL_REQUIREMENTS: Sequence[str] = (
+    "cryptography>=41.0",  # encrypted token storage
+    "psutil>=5.9",  # resource monitoring helpers
+)
 
 
 def _pip_install(args: Iterable[str]) -> None:
@@ -37,8 +46,11 @@ def main() -> None:
     parser.add_argument(
         "--requirements",
         type=Path,
-        default=DEFAULT_REQUIREMENTS,
-        help="Path to requirements file to install before the SDK wheel",
+        default=None,
+        help=(
+            "Optional path to an extra requirements file. Use this to pin bespoke"
+            " dependencies beyond the curated runtime set."
+        ),
     )
     parser.add_argument(
         "--sdk-wheel",
@@ -53,9 +65,12 @@ def main() -> None:
         help="Additional pip requirement specifiers to install",
     )
     parser.add_argument(
-        "--no-requirements",
+        "--include-optional",
         action="store_true",
-        help="Skip installing requirements.txt",
+        help=(
+            "Install optional extras (encryption, resource monitoring). These pull"
+            " in heavier dependencies like cryptography."
+        ),
     )
     parser.add_argument(
         "--no-sdk",
@@ -69,7 +84,16 @@ def main() -> None:
 
     install_args = ["--target", str(target)]
 
-    if not args.no_requirements and args.requirements.exists():
+    # Install the essential requirements one by one to keep transitive
+    # dependencies to the necessary minimum.
+    for requirement in CORE_REQUIREMENTS:
+        _pip_install([*install_args, requirement])
+
+    if args.include_optional:
+        for requirement in OPTIONAL_REQUIREMENTS:
+            _pip_install([*install_args, requirement])
+
+    if args.requirements and args.requirements.exists():
         _pip_install([*install_args, "-r", str(args.requirements)])
 
     if not args.no_sdk and args.sdk_wheel.exists():
