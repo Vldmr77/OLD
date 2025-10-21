@@ -1,0 +1,19 @@
+environment: development
+logging:
+  level: INFO
+datafeed:
+  sandbox_token: "YOUR_TOKEN"
+  use_sandbox: true
+  instruments:
+    - BBG004730ZJ9
+  depth: 10
+features:
+  lob_levels: 10
+ml:
+  batch_size: 64
+risk:
+  max_position: 50
+execution:
+  account_id: ""
+storage:
+  base_path: ./runtime
