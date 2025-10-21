@@ -1,0 +1,33 @@
+environment: development
+logging:
+  level: INFO
+datafeed:
+  sandbox_token: "YOUR_TOKEN"
+  use_sandbox: true
+  instruments:
+    - BBG004730ZJ9
+  monitored_instruments:
+    - BBG004731032
+    - BBG004730N88
+  depth: 10
+  current_cache_ttl: 60
+  current_cache_size: 50
+  history_length: 30
+  soft_rss_limit_mb: 400
+  hard_rss_limit_mb: 700
+features:
+  lob_levels: 10
+  rolling_window: 20
+ml:
+  batch_size: 64
+  weights:
+    lstm_ob: 0.35
+    gbdt_features: 0.25
+    transformer_temporal: 0.25
+    svm_volatility: 0.15
+risk:
+  max_position: 50
+execution:
+  account_id: ""
+storage:
+  base_path: ./runtime
