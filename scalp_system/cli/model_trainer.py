@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Iterable, Optional
 
 from scalp_system.config import DEFAULT_CONFIG_PATH
 from scalp_system.config.loader import load_config
@@ -58,6 +59,51 @@ def run_training(config_path: Path, overrides: dict[str, Any]) -> Path:
     return report.output_path
 
 
+def run_daemon(
+    config_path: Path,
+    overrides: dict[str, Any],
+    *,
+    interval_minutes: float = 60.0,
+    iterations: Optional[int] = None,
+    runner: Callable[[Path, dict[str, Any]], Path] = run_training,
+) -> Iterable[Path]:
+    """Continuously execute training jobs on a fixed interval.
+
+    Parameters
+    ----------
+    config_path:
+        Path to the configuration file used for each run.
+    overrides:
+        Additional configuration overrides that should be applied to each
+        invocation. These mirror the arguments accepted by ``run_training``.
+    interval_minutes:
+        Delay between subsequent runs. The default of 60 minutes matches the
+        operator runbook in the technical specification.
+    iterations:
+        Optional maximum number of iterations. When ``None`` the daemon runs
+        until it is interrupted.
+    runner:
+        Callable used to perform the training step. Injected in tests to avoid
+        heavy work while preserving behaviour.
+
+    Yields
+    ------
+    Path
+        Location of the most recent training artefact produced by ``runner``.
+    """
+
+    interval_seconds = max(0.0, float(interval_minutes) * 60.0)
+    completed = 0
+    while iterations is None or completed < iterations:
+        artefact = runner(config_path, overrides)
+        completed += 1
+        yield artefact
+        if iterations is not None and completed >= iterations:
+            break
+        if interval_seconds:
+            time.sleep(interval_seconds)
+
+
 def main() -> None:
     """CLI entry point for running calibration and training workflows."""
     parser = argparse.ArgumentParser(description="Model trainer")
@@ -95,30 +141,85 @@ def main() -> None:
         "--min-samples", dest="min_samples", type=int, help="Override minimum sample count"
     )
 
+    daemon_parser = subparsers.add_parser(
+        "daemon", help="Run continuous training cycles as a background helper"
+    )
+    daemon_parser.add_argument(
+        "--config",
+        type=Path,
+        default=DEFAULT_CONFIG_PATH,
+        help="Path to config file (defaults to packaged example)",
+    )
+    daemon_parser.add_argument(
+        "--dataset", type=Path, help="Override training dataset path"
+    )
+    daemon_parser.add_argument(
+        "--output", type=Path, help="Override directory for trained artefacts"
+    )
+    daemon_parser.add_argument(
+        "--epochs", type=int, help="Override number of epochs"
+    )
+    daemon_parser.add_argument(
+        "--learning-rate", dest="learning_rate", type=float, help="Override learning rate"
+    )
+    daemon_parser.add_argument(
+        "--validation-split", dest="validation_split", type=float, help="Override validation split"
+    )
+    daemon_parser.add_argument(
+        "--min-samples", dest="min_samples", type=int, help="Override minimum sample count"
+    )
+    daemon_parser.add_argument(
+        "--interval",
+        type=float,
+        default=60.0,
+        help="Minutes to wait between training iterations (default: 60)",
+    )
+    daemon_parser.add_argument(
+        "--max-iterations",
+        type=int,
+        dest="max_iterations",
+        help="Run the daemon for a fixed number of iterations (default: infinite)",
+    )
+
     args = parser.parse_args()
 
     if args.command == "calibrate":
         output = calibrate(args.config)
         print(f"Calibrated weights saved to {output}")
-    else:
-        overrides: dict[str, Any] = {}
-        training_overrides: dict[str, Any] = {}
-        if args.dataset:
-            training_overrides["dataset_path"] = str(args.dataset)
-        if args.output:
-            training_overrides["output_dir"] = str(args.output)
-        if args.epochs is not None:
-            training_overrides["epochs"] = args.epochs
-        if args.learning_rate is not None:
-            training_overrides["learning_rate"] = args.learning_rate
-        if args.validation_split is not None:
-            training_overrides["validation_split"] = args.validation_split
-        if args.min_samples is not None:
-            training_overrides["min_samples"] = args.min_samples
-        if training_overrides:
-            overrides["training"] = training_overrides
+        return
+
+    overrides: dict[str, Any] = {}
+    training_overrides: dict[str, Any] = {}
+    if getattr(args, "dataset", None):
+        training_overrides["dataset_path"] = str(args.dataset)
+    if getattr(args, "output", None):
+        training_overrides["output_dir"] = str(args.output)
+    if getattr(args, "epochs", None) is not None:
+        training_overrides["epochs"] = args.epochs
+    if getattr(args, "learning_rate", None) is not None:
+        training_overrides["learning_rate"] = args.learning_rate
+    if getattr(args, "validation_split", None) is not None:
+        training_overrides["validation_split"] = args.validation_split
+    if getattr(args, "min_samples", None) is not None:
+        training_overrides["min_samples"] = args.min_samples
+    if training_overrides:
+        overrides["training"] = training_overrides
+
+    if args.command == "train":
         artefact = run_training(args.config, overrides)
         print(f"Training artefacts saved to {artefact}")
+        return
+
+    try:
+        for artefact in run_daemon(
+            args.config,
+            overrides,
+            interval_minutes=args.interval,
+            iterations=args.max_iterations,
+        ):
+            print(f"Training artefacts saved to {artefact}")
+    except KeyboardInterrupt:  # pragma: no cover - interactive guard
+        print("Daemon interrupted by user")
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point

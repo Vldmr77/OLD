@@ -106,7 +106,14 @@ python -m scalp_system.cli.dashboard --repository ./runtime/signals.sqlite3 --ho
 - `python -m scalp_system.cli.init_config --env production`
 - `python -m scalp_system.cli.model_trainer calibrate`
 - `python -m scalp_system.cli.model_trainer train --dataset data/training.jsonl --output runtime/models`
-- `python -m scalp_system.cli.health_check`
+- `python -m scalp_system.cli.model_trainer daemon --interval 60`
+- `python -m scalp_system.cli.health_check --module all`
+
+Команда `model_trainer daemon` повторяет оффлайн-обучение по расписанию, используя
+интервал в минутах (по умолчанию 60) и сохраняя артефакты после каждого прогона.
+`health_check --module` позволяет проверить отдельные подсистемы (`storage`,
+`data`, `ml`, `risk`, `notifications`, `calibration`) или все компоненты разом
+(`--module all`), что соответствует сценарию из ТЗ `python health_check.py --module=all`.
 - `python -m scalp_system.cli.backtest --dataset data/backtest.jsonl --output runtime/reports/backtest.json`
 
 Секция `notifications` конфигурации задаёт параметры Telegram-уведомлений и локальных

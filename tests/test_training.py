@@ -1,8 +1,9 @@
 import json
-import json
+from pathlib import Path
 
 import pytest
 
+from scalp_system.cli.model_trainer import run_daemon
 from scalp_system.config.base import TrainingConfig
 from scalp_system.ml.training import ModelTrainer
 
@@ -76,3 +77,26 @@ def test_model_trainer_requires_enough_samples(tmp_path):
 
     with pytest.raises(ValueError):
         trainer.train()
+
+
+def test_run_daemon_honours_iterations(tmp_path):
+    emitted = []
+
+    def fake_runner(config_path: Path, overrides: dict[str, object]):
+        artefact = tmp_path / f"artefact_{len(emitted)}.json"
+        artefact.write_text("{}", encoding="utf-8")
+        emitted.append(artefact)
+        return artefact
+
+    results = list(
+        run_daemon(
+            tmp_path / "config.yaml",
+            {},
+            interval_minutes=0,
+            iterations=2,
+            runner=fake_runner,
+        )
+    )
+
+    assert results == emitted
+    assert len(emitted) == 2
