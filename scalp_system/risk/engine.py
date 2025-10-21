@@ -16,6 +16,7 @@ class Position:
     figi: str
     quantity: int = 0
     average_price: float = 0.0
+    stop_loss: float = 0.0
 
 
 @dataclass
@@ -26,9 +27,19 @@ class RiskMetrics:
     var_value: float
 
 
+@dataclass
+class OrderPlan:
+    quantity: int
+    strategy: str
+    stop_loss: float
+    aggressiveness: float
+    slices: int
+
+
 class RiskEngine:
     def __init__(self, limits: RiskLimits) -> None:
         self._limits = limits
+        self._limits.ensure()
         self._positions: Dict[str, Position] = {}
         self._order_count: int = 0
         self._last_reset = datetime.utcnow()
@@ -44,40 +55,48 @@ class RiskEngine:
         self._calibration_expiry: Optional[datetime] = None
         self._emergency_reason: Optional[str] = None
 
-    def evaluate_signal(self, signal: MLSignal, price: float) -> bool:
+        self._capital_base = self._limits.capital_base
+
+    def evaluate_signal(
+        self,
+        signal: MLSignal,
+        price: float,
+        *,
+        spread: float,
+        atr: float,
+        market_volatility: float,
+    ) -> Optional[OrderPlan]:
         self._reset_if_new_day()
         if self._loss_cooldown_until and datetime.utcnow() >= self._loss_cooldown_until:
             self._loss_cooldown_until = None
         if self._halt_trading:
-            return False
+            return None
         if self._loss_cooldown_until and datetime.utcnow() < self._loss_cooldown_until:
-            return False
-        if (
-            self._limits.max_daily_loss > 0
-            and self._daily_loss_triggered
-            and self._realized_pnl <= -self._limits.max_daily_loss
-        ):
-            return False
+            return None
+        if self._limits.vix_threshold > 0 and market_volatility >= self._limits.vix_threshold:
+            self.trigger_emergency_halt("vix_threshold")
+            return None
+        if self._daily_loss_triggered and self._realized_pnl <= -self._daily_loss_limit_value():
+            return None
         position = self._positions.get(signal.figi, Position(figi=signal.figi))
-        projected_qty = position.quantity + signal.direction
-        if abs(projected_qty) > self._limits.max_position:
-            return False
-        projected_exposure = abs(projected_qty * price)
-        if projected_exposure > self._limits.max_gross_exposure:
-            return False
-        if self._order_count >= self._limits.max_order_rate_per_minute:
-            return False
-        return True
+        plan = self._build_order_plan(position, signal, price, spread, atr)
+        if plan is None:
+            return None
+        if self._order_count + plan.slices > self._limits.max_order_rate_per_minute:
+            return None
+        return plan
 
-    def register_order(self) -> None:
+    def register_order(self, slices: int = 1) -> None:
         self._reset_if_new_day()
         now = datetime.utcnow()
         if (now - self._last_reset).total_seconds() > 60:
             self._order_count = 0
             self._last_reset = now
-        self._order_count += 1
+        self._order_count += max(1, slices)
 
-    def update_position(self, figi: str, quantity_delta: int, price: float) -> None:
+    def update_position(
+        self, figi: str, quantity_delta: int, price: float, stop_loss: Optional[float] = None
+    ) -> None:
         self._reset_if_new_day()
         position = self._positions.setdefault(figi, Position(figi=figi))
         prev_qty = position.quantity
@@ -91,10 +110,13 @@ class RiskEngine:
             if remaining == 0:
                 position.quantity = 0
                 position.average_price = 0.0
+                position.stop_loss = 0.0
                 return
             if prev_qty * remaining > 0:
                 position.quantity = remaining
                 position.average_price = prev_avg
+                if stop_loss is not None:
+                    position.stop_loss = stop_loss
                 return
             quantity_delta = remaining
             prev_qty = 0
@@ -104,14 +126,18 @@ class RiskEngine:
         if new_qty == 0:
             position.quantity = 0
             position.average_price = 0.0
+            position.stop_loss = 0.0
         elif prev_qty == 0:
             position.quantity = new_qty
             position.average_price = price
+            position.stop_loss = stop_loss or position.stop_loss
         else:
             position.average_price = (
                 (prev_avg * prev_qty + price * quantity_delta) / new_qty
             )
             position.quantity = new_qty
+            if stop_loss is not None:
+                position.stop_loss = stop_loss
 
     def metrics(self, market_prices: Dict[str, float]) -> RiskMetrics:
         unrealized = 0.0
@@ -191,7 +217,8 @@ class RiskEngine:
 
     def _update_loss_state(self, realized: float) -> None:
         self._realized_pnl += realized
-        if self._limits.max_daily_loss > 0 and self._realized_pnl <= -self._limits.max_daily_loss:
+        daily_limit = self._daily_loss_limit_value()
+        if daily_limit > 0 and self._realized_pnl <= -daily_limit:
             self._daily_loss_triggered = True
             self._halt_trading = True
         if realized < 0:
@@ -211,6 +238,7 @@ class RiskEngine:
                 "figi": pos.figi,
                 "quantity": pos.quantity,
                 "average_price": pos.average_price,
+                "stop_loss": pos.stop_loss,
             }
             for pos in self._positions.values()
         ]
@@ -231,6 +259,7 @@ class RiskEngine:
             "calibration_expiry": self._calibration_expiry.isoformat()
             if self._calibration_expiry
             else None,
+            "capital_base": self._capital_base,
         }
         return payload
 
@@ -241,9 +270,12 @@ class RiskEngine:
                 figi = item["figi"]
                 qty = int(item.get("quantity", 0))
                 price = float(item.get("average_price", 0.0))
+                stop = float(item.get("stop_loss", 0.0))
             except (KeyError, TypeError, ValueError):
                 continue
-            self._positions[figi] = Position(figi=figi, quantity=qty, average_price=price)
+            self._positions[figi] = Position(
+                figi=figi, quantity=qty, average_price=price, stop_loss=stop
+            )
         self._realized_pnl = float(payload.get("realized_pnl", 0.0))
         self._consecutive_losses = int(payload.get("consecutive_losses", 0))
         loss_until = payload.get("loss_cooldown_until")
@@ -267,6 +299,7 @@ class RiskEngine:
             if isinstance(calibration_expiry, str)
             else None
         )
+        self._capital_base = float(payload.get("capital_base", self._limits.capital_base))
 
     def performance_snapshot(self) -> dict:
         return {
@@ -276,5 +309,93 @@ class RiskEngine:
             "halt_trading": self._halt_trading,
         }
 
+    def calculate_order_plan(
+        self, signal: MLSignal, price: float, *, spread: float, atr: float
+    ) -> Optional[OrderPlan]:
+        position = self._positions.get(signal.figi, Position(figi=signal.figi))
+        return self._build_order_plan(position, signal, price, spread, atr)
 
-__all__ = ["RiskEngine", "RiskMetrics", "Position"]
+    def update_capital(self, equity: float) -> None:
+        self._capital_base = max(equity, 1.0)
+
+
+    def _build_order_plan(
+        self,
+        position: Position,
+        signal: MLSignal,
+        price: float,
+        spread: float,
+        atr: float,
+    ) -> Optional[OrderPlan]:
+        spread = max(spread, 0.01)
+        atr = max(atr, 0.0)
+        stop_loss = price * (1 + (1.8 * atr + 0.5 * spread) * signal.direction)
+        stop_distance = abs(stop_loss - price)
+        if stop_distance <= 0:
+            stop_distance = max(price * 0.001, 0.01)
+
+        capacity = self._capacity_for(position, signal.direction)
+        if capacity <= 0:
+            return None
+
+        risk_budget = self._capital_base * self._limits.max_risk_per_instrument
+        if risk_budget <= 0:
+            return None
+        raw_quantity = int(risk_budget / stop_distance)
+        quantity = max(1, min(raw_quantity, capacity))
+
+        if position.quantity * signal.direction >= 0 and quantity <= 0:
+            return None
+
+        limit_value = min(
+            self._limits.max_gross_exposure,
+            self._limits.max_exposure_pct * self._capital_base,
+        )
+        if limit_value > 0:
+            max_quantity = int(limit_value / price) if price > 0 else 0
+            if position.quantity and abs(position.quantity) > max_quantity:
+                return None
+            remaining_capacity = max_quantity - abs(position.quantity)
+            if position.quantity * signal.direction >= 0:
+                if remaining_capacity <= 0:
+                    return None
+                quantity = min(quantity, remaining_capacity)
+        if quantity <= 0:
+            return None
+
+        strategy = "vwap" if quantity > 5 else "ioc"
+        aggressiveness = 0.8 if strategy == "vwap" else 1.0
+        slices = 2 if strategy == "vwap" and quantity > 5 else 1
+
+        projected_qty = position.quantity + signal.direction * quantity
+        if abs(projected_qty) > self._limits.max_position:
+            return None
+        projected_exposure = abs(projected_qty * price)
+        exposure_limit = min(
+            self._limits.max_gross_exposure,
+            self._limits.max_exposure_pct * self._capital_base,
+        )
+        if exposure_limit > 0 and projected_exposure > exposure_limit:
+            return None
+
+        return OrderPlan(
+            quantity=quantity,
+            strategy=strategy,
+            stop_loss=stop_loss,
+            aggressiveness=aggressiveness,
+            slices=slices,
+        )
+
+    def _capacity_for(self, position: Position, direction: int) -> int:
+        if direction > 0:
+            return self._limits.max_position - position.quantity
+        if direction < 0:
+            return self._limits.max_position + position.quantity
+        return 0
+
+    def _daily_loss_limit_value(self) -> float:
+        pct_limit = self._capital_base * self._limits.daily_loss_limit_pct
+        return max(self._limits.max_daily_loss, pct_limit)
+
+
+__all__ = ["RiskEngine", "RiskMetrics", "Position", "OrderPlan"]

@@ -91,41 +91,57 @@ class BacktestEngine:
             price = book.mid_price()
             prediction.direction = direction
             prediction.figi = book.figi
-            if not self._risk_engine.evaluate_signal(prediction, price):
+            spread = book.spread()
+            atr = self._atr(window)
+            plan = self._risk_engine.evaluate_signal(
+                prediction,
+                price,
+                spread=spread,
+                atr=atr,
+                market_volatility=market.market_volatility,
+            )
+            if not plan:
                 equity_curve.append(self._current_equity(equity, positions, entry_prices, last_prices))
                 peak_equity = max(peak_equity, equity_curve[-1])
                 max_drawdown = max(max_drawdown, peak_equity - equity_curve[-1])
                 continue
 
-            position = positions[book.figi]
-            if position and position == -direction:
-                self._risk_engine.register_order()
-                fee_multiplier = (
-                    self._config.transaction_cost_bps + self._config.slippage_bps
-                ) / 10000
-                equity -= abs(direction) * price * fee_multiplier
-                trade_pnl = (price - entry_prices[book.figi]) * position
-                equity += trade_pnl
-                trades_closed += 1
-                if trade_pnl > 0:
-                    winning_trades += 1
-                positions[book.figi] = 0
-                entry_prices.pop(book.figi, None)
-                self._risk_engine.update_position(book.figi, -position, price)
-                orders_executed += 1
-            elif position == 0:
-                self._risk_engine.register_order()
-                fee_multiplier = (
-                    self._config.transaction_cost_bps + self._config.slippage_bps
-                ) / 10000
-                equity -= abs(direction) * price * fee_multiplier
-                positions[book.figi] = direction
-                entry_prices[book.figi] = price
-                self._risk_engine.update_position(book.figi, direction, price)
-                orders_executed += 1
+            fee_multiplier = (
+                self._config.transaction_cost_bps + self._config.slippage_bps
+            ) / 10000
+            equity -= plan.quantity * price * fee_multiplier
+            qty_delta = direction * plan.quantity
+            current_qty = positions[book.figi]
+            if current_qty == 0 or current_qty * qty_delta > 0:
+                new_qty = current_qty + qty_delta
+                if current_qty == 0:
+                    entry_prices[book.figi] = price
+                else:
+                    total_qty = abs(current_qty) + plan.quantity
+                    entry_prices[book.figi] = (
+                        entry_prices[book.figi] * abs(current_qty) + price * plan.quantity
+                    ) / total_qty
+                positions[book.figi] = new_qty
             else:
-                # same side signal, ignore to avoid runaway leverage
-                pass
+                closed_qty = min(abs(current_qty), plan.quantity)
+                pnl_sign = 1 if current_qty > 0 else -1
+                trade_pnl = (price - entry_prices[book.figi]) * closed_qty * pnl_sign
+                equity += trade_pnl
+                if closed_qty > 0:
+                    trades_closed += 1
+                    if trade_pnl > 0:
+                        winning_trades += 1
+                remaining = current_qty + qty_delta
+                if remaining == 0:
+                    positions[book.figi] = 0
+                    entry_prices.pop(book.figi, None)
+                else:
+                    positions[book.figi] = remaining
+                    if remaining * current_qty < 0:
+                        entry_prices[book.figi] = price
+            self._risk_engine.register_order(plan.slices)
+            self._risk_engine.update_position(book.figi, qty_delta, price, plan.stop_loss)
+            orders_executed += plan.slices
 
             current_equity = self._current_equity(equity, positions, entry_prices, last_prices)
             equity_curve.append(current_equity)
@@ -210,6 +226,22 @@ class BacktestEngine:
             market_liquidity=liquidity,
             market_index=market_index,
         )
+
+    def _atr(self, window: Iterable[OrderBook], periods: int = 5) -> float:
+        books = list(window)
+        if len(books) < 2:
+            return 0.0
+        recent = books[-max(periods + 1, 2) :]
+        prev_close = recent[0].mid_price()
+        true_ranges: List[float] = []
+        for book in recent[1:]:
+            high = book.asks[0].price if book.asks else prev_close
+            low = book.bids[0].price if book.bids else prev_close
+            true_ranges.append(max(high, prev_close) - min(low, prev_close))
+            prev_close = book.mid_price()
+        if not true_ranges:
+            return 0.0
+        return sum(true_ranges) / len(true_ranges)
 
 
 __all__ = ["BacktestEngine", "BacktestResult"]

@@ -417,6 +417,7 @@ class Orchestrator:
                     continue
                 mid_price = order_book.mid_price()
                 spread = order_book.spread()
+                atr = self._data_engine.atr(order_book.figi, periods=5)
                 if mid_price > 0:
                     spread_bps = (spread / mid_price) * 10_000
                     if (
@@ -507,22 +508,33 @@ class Orchestrator:
                     self._metrics.record_signal(signal.figi, signal.confidence)
                     self._repository.persist_signal(signal.figi, signal.direction, signal.confidence)
                     with timed("risk", self._handle_latency):
-                        allowed = self._risk_engine.evaluate_signal(
-                            signal, order_book.mid_price()
+                        plan = self._risk_engine.evaluate_signal(
+                            signal,
+                            mid_price,
+                            spread=spread,
+                            atr=atr,
+                            market_volatility=market.market_volatility,
                         )
-                    if not allowed:
+                    if not plan:
                         LOGGER.info("Signal rejected by risk engine")
                         self._audit_logger.log(
-                            "ORDER", "REJECTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
+                            "ORDER",
+                            "REJECTED",
+                            f"figi={signal.figi};confidence={signal.confidence:.3f}",
                         )
                         continue
                     report = await ExecutionEngine(
                         broker_factory, self._risk_engine
-                    ).execute_signal(signal, order_book.mid_price(), skip_risk=True)
+                    ).execute_plan(signal, plan, mid_price)
                     if report.accepted:
                         LOGGER.info("Order executed for %s", signal.figi)
                         self._audit_logger.log(
-                            "ORDER", "EXECUTED", f"figi={signal.figi};confidence={signal.confidence:.3f}"
+                            "ORDER",
+                            "EXECUTED",
+                            (
+                                f"figi={signal.figi};confidence={signal.confidence:.3f};"
+                                f"qty={plan.quantity};strategy={plan.strategy};stop={plan.stop_loss:.2f}"
+                            ),
                         )
                         await self._notifications.notify_order_filled(
                             signal.figi, order_book.mid_price(), signal.confidence

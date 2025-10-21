@@ -192,6 +192,27 @@ class DataEngine:
             return ()
         return tuple(history)
 
+    def atr(self, figi: str, periods: int = 5) -> float:
+        """Compute a simple ATR proxy from the recent order book history."""
+
+        history = self._history.get(figi)
+        if not history or len(history) < 2:
+            return 0.0
+        window = list(history)[-max(periods + 1, 2) :]
+        if len(window) < 2:
+            return 0.0
+        true_ranges: List[float] = []
+        prev_close = window[0].mid_price()
+        for book in window[1:]:
+            high = book.asks[0].price if book.asks else prev_close
+            low = book.bids[0].price if book.bids else prev_close
+            tr = max(high, prev_close) - min(low, prev_close)
+            true_ranges.append(tr)
+            prev_close = book.mid_price()
+        if not true_ranges:
+            return 0.0
+        return sum(true_ranges) / len(true_ranges)
+
     def resynchronise(self) -> None:
         """Flush cached order books so the engine refetches fresh data."""
 

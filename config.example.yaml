@@ -50,8 +50,15 @@ ml:
 risk:
   max_position: 50
   max_daily_loss: 10000.0
+  max_order_rate_per_minute: 120
+  max_gross_exposure: 500000.0
   max_consecutive_losses: 3
   loss_cooldown_minutes: 15
+  capital_base: 500000.0
+  max_risk_per_instrument: 0.05
+  daily_loss_limit_pct: 0.02
+  max_exposure_pct: 0.5
+  vix_threshold: 0.4
 execution:
   account_id: ""
 storage:

@@ -79,6 +79,21 @@ class RiskLimits:
     max_gross_exposure: float = 500000.0
     loss_cooldown_minutes: int = 15
     max_consecutive_losses: int = 3
+    capital_base: float = 500000.0
+    max_risk_per_instrument: float = 0.05
+    daily_loss_limit_pct: float = 0.02
+    max_exposure_pct: float = 0.5
+    vix_threshold: float = 0.4
+
+    def ensure(self) -> None:
+        self.max_position = max(1, int(self.max_position))
+        self.max_order_rate_per_minute = max(1, int(self.max_order_rate_per_minute))
+        self.var_horizon_minutes = max(1, int(self.var_horizon_minutes))
+        self.capital_base = max(float(self.capital_base), 1.0)
+        self.max_risk_per_instrument = min(max(float(self.max_risk_per_instrument), 0.0), 1.0)
+        self.daily_loss_limit_pct = min(max(float(self.daily_loss_limit_pct), 0.0), 1.0)
+        self.max_exposure_pct = min(max(float(self.max_exposure_pct), 0.0), 1.0)
+        self.vix_threshold = max(float(self.vix_threshold), 0.0)
 
 
 @dataclass
@@ -358,6 +373,7 @@ class OrchestratorConfig:
     def __post_init__(self) -> None:
         self.storage.ensure()
         self.ml.weights.normalise()
+        self.risk.ensure()
         self.training.ensure()
         self.backtest.ensure()
         self.system.ensure()
