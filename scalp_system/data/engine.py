@@ -1,6 +1,7 @@
 """Data management utilities for streaming order book processing."""
 from __future__ import annotations
 
+import gc
 import os
 import time
 from collections import OrderedDict, deque
@@ -252,6 +253,7 @@ class DataEngine:
             self._current.clear()
             self._history.clear()
             self._stats.clear()
+            gc.collect()
         elif rss > self._soft_rss_limit:
             for figi, history in list(self._history.items()):
                 while len(history) > self._history_size // 2:

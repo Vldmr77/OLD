@@ -90,9 +90,20 @@ class ExecutionConfig:
 class StorageConfig:
     base_path: Path = Path("./runtime")
     enable_zstd: bool = True
+    cache_flush_min_seconds: float = 1.0
+    cache_flush_max_seconds: float = 5.0
+    cache_target_buffer: int = 50
 
     def ensure(self) -> None:
+        if not isinstance(self.base_path, Path):
+            self.base_path = Path(self.base_path).expanduser()
         self.base_path.mkdir(parents=True, exist_ok=True)
+        if self.cache_flush_min_seconds <= 0:
+            self.cache_flush_min_seconds = 1.0
+        if self.cache_flush_max_seconds < self.cache_flush_min_seconds:
+            self.cache_flush_max_seconds = self.cache_flush_min_seconds
+        if self.cache_target_buffer <= 0:
+            self.cache_target_buffer = 1
 
 
 @dataclass
@@ -116,10 +127,16 @@ class TrainingConfig:
     learning_rate: float = 0.01
     validation_split: float = 0.2
     min_samples: int = 10
+    enable_quantization: bool = True
+    quantization_int8_threshold: float = 0.5
 
     def ensure(self) -> None:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.dataset_path.parent.mkdir(parents=True, exist_ok=True)
+        if self.quantization_int8_threshold <= 0:
+            self.quantization_int8_threshold = 0.5
+        elif self.quantization_int8_threshold >= 1:
+            self.quantization_int8_threshold = 0.9
 
 
 @dataclass
@@ -145,6 +162,7 @@ class OrchestratorConfig:
     def from_dict(cls, data: Dict[str, object]) -> "OrchestratorConfig":
         monitoring_data = _ensure_dict(data.get("monitoring", {}))
         security_data = _ensure_dict(data.get("security", {}))
+        training_data = _ensure_dict(data.get("training", {}))
         encryption_value = security_data.get("encryption_key_path")
         return cls(
             environment=data.get("environment", "development"),
@@ -165,16 +183,14 @@ class OrchestratorConfig:
                 encryption_key_path=_to_path(encryption_value) if encryption_value else None
             ),
             training=TrainingConfig(
-                dataset_path=_to_path(
-                    _ensure_dict(data.get("training", {})).get("dataset_path", Path("./data/training.jsonl"))
-                ),
-                output_dir=_to_path(
-                    _ensure_dict(data.get("training", {})).get("output_dir", Path("./models"))
-                ),
-                epochs=_ensure_dict(data.get("training", {})).get("epochs", 5),
-                learning_rate=_ensure_dict(data.get("training", {})).get("learning_rate", 0.01),
-                validation_split=_ensure_dict(data.get("training", {})).get("validation_split", 0.2),
-                min_samples=_ensure_dict(data.get("training", {})).get("min_samples", 10),
+                dataset_path=_to_path(training_data.get("dataset_path", Path("./data/training.jsonl"))),
+                output_dir=_to_path(training_data.get("output_dir", Path("./models"))),
+                epochs=training_data.get("epochs", 5),
+                learning_rate=training_data.get("learning_rate", 0.01),
+                validation_split=training_data.get("validation_split", 0.2),
+                min_samples=training_data.get("min_samples", 10),
+                enable_quantization=training_data.get("enable_quantization", True),
+                quantization_int8_threshold=training_data.get("quantization_int8_threshold", 0.5),
             ),
         )
 

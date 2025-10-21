@@ -37,7 +37,12 @@ class Orchestrator:
         self._ml_engine = MLEngine(config.ml)
         self._risk_engine = RiskEngine(config.risk)
         self._metrics = MetricsRegistry()
-        self._repository = SQLiteRepository(config.storage.base_path / "signals.db")
+        self._repository = SQLiteRepository(
+            config.storage.base_path / "signals.db",
+            cache_min_interval=config.storage.cache_flush_min_seconds,
+            cache_max_interval=config.storage.cache_flush_max_seconds,
+            cache_target_buffer=config.storage.cache_target_buffer,
+        )
         self._drift_detector = DriftDetector(
             threshold=config.ml.drift_threshold,
             history_dir=config.storage.base_path / "drift_metrics",

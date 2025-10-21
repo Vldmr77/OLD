@@ -44,6 +44,13 @@ def test_model_trainer_outputs_weights(tmp_path):
         "svm_volatility",
     }
     assert sum(weights.values()) == pytest.approx(1.0, rel=1e-6)
+    assert report.quantization_plan is not None
+    plan_entries = json.loads(report.quantization_plan.read_text(encoding="utf-8"))
+    assert plan_entries
+    assert {entry["precision"] for entry in plan_entries} <= {"int8", "float16"}
+    assert len(report.quantization_decisions) == 4
+    for decision in report.quantization_decisions:
+        assert decision.precision in {"int8", "float16"}
 
 
 def test_model_trainer_requires_enough_samples(tmp_path):

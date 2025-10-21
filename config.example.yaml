@@ -32,6 +32,9 @@ execution:
   account_id: ""
 storage:
   base_path: ./runtime
+  cache_flush_min_seconds: 1.0
+  cache_flush_max_seconds: 5.0
+  cache_target_buffer: 50
 monitoring:
   cpu_soft_limit: 90.0
   memory_soft_limit: 85.0
@@ -46,3 +49,5 @@ training:
   learning_rate: 0.01
   validation_split: 0.2
   min_samples: 10
+  enable_quantization: true
+  quantization_int8_threshold: 0.5

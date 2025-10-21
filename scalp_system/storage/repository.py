@@ -7,18 +7,30 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator, List
+from typing import Iterator, List, Optional
 
 
 class SQLiteRepository:
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        cache_min_interval: float = 1.0,
+        cache_max_interval: float = 5.0,
+        cache_target_buffer: int = 50,
+    ) -> None:
         self._path = path
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._fallback_path = self._path.with_suffix(".fallback.jsonl")
         self._cache_path = self._path.with_suffix(".cache.jsonl")
         self._cache_buffer: List[dict] = []
         self._last_cache_flush = time.monotonic()
-        self._cache_interval = 30.0
+        self._min_cache_interval = max(0.1, cache_min_interval)
+        self._max_cache_interval = max(self._min_cache_interval, cache_max_interval)
+        self._target_buffer = max(1, cache_target_buffer)
+        self._cache_interval = self._max_cache_interval
+        self._last_record_ts: Optional[float] = None
+        self._arrival_ema: Optional[float] = None
         self._initialise()
 
     def _initialise(self) -> None:
@@ -66,6 +78,7 @@ class SQLiteRepository:
     def _record_cache(self, record: dict) -> None:
         self._cache_buffer.append(record)
         now = time.monotonic()
+        self._adjust_cache_interval(now)
         if now - self._last_cache_flush >= self._cache_interval:
             self._flush_cache()
             self._last_cache_flush = now
@@ -81,6 +94,29 @@ class SQLiteRepository:
     def _fallback_write(self, record: dict) -> None:
         with self._fallback_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def _adjust_cache_interval(self, now: float) -> None:
+        """Adapt the cache flush cadence to the observed throughput."""
+
+        if self._last_record_ts is not None:
+            delta = max(now - self._last_record_ts, 1e-6)
+            alpha = 0.2
+            if self._arrival_ema is None:
+                self._arrival_ema = delta
+            else:
+                self._arrival_ema = (1 - alpha) * self._arrival_ema + alpha * delta
+        self._last_record_ts = now
+
+        if self._arrival_ema and self._arrival_ema > 0:
+            throughput = 1.0 / self._arrival_ema
+            suggested = self._target_buffer / throughput
+        else:
+            suggested = self._max_cache_interval
+
+        buffer_ratio = max(1.0, len(self._cache_buffer) / self._target_buffer)
+        target_interval = suggested / buffer_ratio
+        target_interval = max(self._min_cache_interval, min(self._max_cache_interval, target_interval))
+        self._cache_interval = target_interval
 
 
 __all__ = ["SQLiteRepository"]

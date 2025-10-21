@@ -35,3 +35,25 @@ def test_repository_fallback_on_error(tmp_path, monkeypatch):
     entries = read_jsonl(fallback_path)
     assert entries
     assert entries[0]["direction"] == -1
+
+
+def test_repository_dynamic_interval_adapts(tmp_path, monkeypatch):
+    clock = {"value": 0.0}
+
+    def fake_monotonic() -> float:
+        clock["value"] += 0.1
+        return clock["value"]
+
+    monkeypatch.setattr("scalp_system.storage.repository.time.monotonic", fake_monotonic)
+    repo = SQLiteRepository(
+        tmp_path / "signals.db",
+        cache_min_interval=1.0,
+        cache_max_interval=5.0,
+        cache_target_buffer=5,
+    )
+    initial_interval = repo._cache_interval
+    for index in range(15):
+        repo.persist_signal(f"FIGI{index}", 1, 0.5)
+    assert repo._cache_interval <= initial_interval
+    assert repo._cache_interval >= repo._min_cache_interval
+    assert repo._cache_interval <= repo._max_cache_interval

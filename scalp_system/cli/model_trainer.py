@@ -39,6 +39,16 @@ def run_training(config_path: Path, overrides: dict[str, Any]) -> Path:
                     "svm_volatility": report.weights.svm_volatility,
                 },
                 "artefact": str(report.output_path),
+                "quantization_plan": str(report.quantization_plan) if report.quantization_plan else None,
+                "quantization": [
+                    {
+                        "model": decision.model_name,
+                        "precision": decision.precision,
+                        "weight": decision.weight,
+                        "converter": decision.converter_directive,
+                    }
+                    for decision in report.quantization_decisions
+                ],
             },
             indent=2,
         ),

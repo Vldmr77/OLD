@@ -8,6 +8,11 @@ from statistics import mean
 from typing import Iterable, Sequence
 
 from scalp_system.config.base import ModelWeights, TrainingConfig
+from scalp_system.ml.quantization import (
+    QuantizationDecision,
+    build_quantization_plan,
+    persist_quantization_plan,
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,8 @@ class TrainingReport:
     validation_loss: float
     weights: ModelWeights
     output_path: Path
+    quantization_plan: Path | None
+    quantization_decisions: list[QuantizationDecision]
 
 
 class ModelTrainer:
@@ -76,6 +83,16 @@ class ModelTrainer:
             encoding="utf-8",
         )
 
+        quantization_decisions: list[QuantizationDecision] = []
+        quantization_plan: Path | None = None
+        if self.config.enable_quantization:
+            quantization_decisions = build_quantization_plan(
+                weights, self.config.quantization_int8_threshold
+            )
+            quantization_plan = persist_quantization_plan(
+                quantization_decisions, self.config.output_dir
+            )
+
         return TrainingReport(
             samples=len(samples),
             epochs=self.config.epochs,
@@ -83,6 +100,8 @@ class ModelTrainer:
             validation_loss=validation_loss,
             weights=weights,
             output_path=output_path,
+            quantization_plan=quantization_plan,
+            quantization_decisions=quantization_decisions,
         )
 
 
