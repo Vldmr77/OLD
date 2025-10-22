@@ -22,13 +22,22 @@ def dummy_config() -> SimpleNamespace:
     )
 
 
-def _install_asyncio_stub(monkeypatch):
+def _install_asyncio_stub(monkeypatch, run_factory=None):
     called = {}
 
-    async def _noop():
-        return None
+    def _default_factory():
+        async def _noop():
+            return None
 
-    monkeypatch.setattr(orchestrator, "Orchestrator", lambda config: SimpleNamespace(run=_noop))
+        return _noop
+
+    factory = run_factory or _default_factory
+
+    monkeypatch.setattr(
+        orchestrator,
+        "Orchestrator",
+        lambda config, config_path=None: SimpleNamespace(run=factory()),
+    )
 
     def _fake_run(coro):
         called["run"] = True
@@ -83,4 +92,33 @@ def test_run_from_yaml_requires_sdk_when_tokens_present(monkeypatch, tmp_path, d
     orchestrator.run_from_yaml(config_path)
 
     assert called["ensure"] == 1
+    assert asyncio_calls.get("run") is True
+
+
+def test_run_from_yaml_restarts_when_requested(monkeypatch, tmp_path, dummy_config):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(orchestrator, "load_config", lambda path: dummy_config)
+
+    def _ensure():
+        return None
+
+    monkeypatch.setattr(orchestrator, "ensure_sdk_available", _ensure)
+
+    runs = {"count": 0}
+
+    def _run_factory():
+        async def _run():
+            runs["count"] += 1
+            if runs["count"] == 1:
+                raise orchestrator.RestartRequested()
+
+        return _run
+
+    asyncio_calls = _install_asyncio_stub(monkeypatch, run_factory=_run_factory)
+
+    orchestrator.run_from_yaml(config_path)
+
+    assert runs["count"] == 2
     assert asyncio_calls.get("run") is True

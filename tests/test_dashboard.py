@@ -73,6 +73,10 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
         headless: bool,
         title: str,
         background: bool,
+        config_path=None,
+        restart_callback=None,
+        token_status_provider=None,
+        token_writer=None,
     ):
         calls.update(
             {
@@ -83,6 +87,10 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
                 "headless": headless,
                 "title": title,
                 "background": background,
+                "config_path": config_path,
+                "restart_callback": restart_callback,
+                "token_status_provider": token_status_provider,
+                "token_writer": token_writer,
             }
         )
 
@@ -102,6 +110,8 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
     assert calls["headless"] is True
     assert calls["title"] == "Test Dashboard"
     assert calls["background"] is True
+    assert calls["config_path"] is None
+    assert callable(calls["restart_callback"])
     provider = calls["status_provider"]
     assert provider.__self__ is orchestrator  # bound method
 

@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from scalp_system.config.token_prompt import ensure_tokens_present
+from scalp_system.config.token_prompt import (
+    ensure_tokens_present,
+    store_tokens,
+    token_status,
+)
 from scalp_system.security.key_manager import KeyManager
 
 try:
@@ -98,3 +102,19 @@ def test_allow_tokenless_skips_prompt(tmp_path, monkeypatch):
 
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert data["datafeed"]["sandbox_token"] is None
+
+
+@pytest.mark.skipif(yaml is None, reason="PyYAML is required for token prompt tests")
+def test_store_tokens_updates_and_reports_status(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("datafeed: {}\n", encoding="utf-8")
+
+    updated = store_tokens(config_path, sandbox="AAA", production="")
+    assert updated is True
+
+    status = token_status(config_path)
+    assert status["sandbox"] is True
+    assert status["production"] is False
+
+    updated_again = store_tokens(config_path, sandbox=None, production=None)
+    assert updated_again is False

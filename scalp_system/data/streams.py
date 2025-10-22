@@ -115,13 +115,18 @@ async def iterate_stream(
     integrity_check: Optional[Callable[[], Awaitable[bool]]] = None,
     on_failure: Optional[Callable[[Exception], Awaitable[None] | None]] = None,
     on_recovery: Optional[Callable[[], Awaitable[None] | None]] = None,
+    stop_event: Optional[asyncio.Event] = None,
 ) -> AsyncIterator[OrderBook]:
     backoff = delay or 1.0
     recovering = False
     while True:
+        if stop_event and stop_event.is_set():
+            break
         try:
             async with stream_factory() as stream:
                 async for order_book in stream.order_books():
+                    if stop_event and stop_event.is_set():
+                        return
                     backoff = delay or 1.0
                     if recovering and on_recovery is not None:
                         await _maybe_await(on_recovery)
@@ -139,6 +144,8 @@ async def iterate_stream(
                         LOGGER.warning("Integrity check failed during reconnect")
                 except Exception:  # pragma: no cover - defensive guard
                     LOGGER.exception("Integrity check raised an exception")
+            if stop_event and stop_event.is_set():
+                break
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, 60.0)
             recovering = True

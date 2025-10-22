@@ -92,6 +92,63 @@ def ensure_tokens_present(config_path: Path | None) -> Path:
     return path
 
 
+def token_status(config_path: Path | None) -> Dict[str, bool]:
+    """Return booleans indicating whether sandbox/production tokens exist."""
+
+    path = _ensure_config_path(config_path)
+    data = _load_yaml(path)
+    datafeed = data.get("datafeed", {}) if isinstance(data, dict) else {}
+    sandbox_present = not _token_missing(datafeed.get("sandbox_token"))
+    production_present = not _token_missing(datafeed.get("production_token"))
+    return {"sandbox": sandbox_present, "production": production_present}
+
+
+def store_tokens(
+    config_path: Path | None,
+    *,
+    sandbox: Optional[str] = None,
+    production: Optional[str] = None,
+) -> bool:
+    """Persist provided tokens back to the configuration file.
+
+    Empty strings clear the respective value. ``None`` leaves the existing token
+    untouched. Returns ``True`` when the file contents were modified.
+    """
+
+    path = _ensure_config_path(config_path)
+    data = _load_yaml(path)
+    datafeed = data.setdefault("datafeed", {})
+    if not isinstance(datafeed, dict):
+        raise ValueError("datafeed section must be a mapping")
+
+    security = data.get("security", {})
+    key_manager = _build_key_manager(security, config_path=path)
+
+    updated = False
+
+    def _apply(field: str, value: Optional[str]) -> None:
+        nonlocal updated
+        if value is None:
+            return
+        if value == "":
+            if datafeed.get(field) is not None:
+                datafeed[field] = None
+                updated = True
+            return
+        encoded = _encode_token(value, key_manager)
+        if datafeed.get(field) != encoded:
+            datafeed[field] = encoded
+            updated = True
+
+    _apply("sandbox_token", sandbox)
+    _apply("production_token", production)
+
+    if updated:
+        _dump_yaml(path, data)
+
+    return updated
+
+
 def _ensure_config_path(config_path: Path | None) -> Path:
     if config_path is None:
         return DEFAULT_CONFIG_PATH
@@ -189,4 +246,9 @@ def _encode_token(token: str, key_manager: Optional[KeyManager]) -> str:
     return f"enc:{key_manager.encrypt(token)}"
 
 
-__all__ = ["ensure_tokens_present", "is_placeholder_token"]
+__all__ = [
+    "ensure_tokens_present",
+    "is_placeholder_token",
+    "store_tokens",
+    "token_status",
+]

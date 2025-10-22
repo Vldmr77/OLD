@@ -52,8 +52,12 @@ from .ui import DashboardStatus, ModuleStatus, run_dashboard
 LOGGER = logging.getLogger(__name__)
 
 
+class RestartRequested(RuntimeError):
+    """Raised when the dashboard requests an orchestrator restart."""
+
+
 class Orchestrator:
-    def __init__(self, config: OrchestratorConfig) -> None:
+    def __init__(self, config: OrchestratorConfig, *, config_path: Path | None = None) -> None:
         self._config = config
         self._feature_pipeline = FeaturePipeline(config.features)
         self._ml_engine = MLEngine(config.ml)
@@ -118,6 +122,11 @@ class Orchestrator:
             config.system.latency_thresholds,
             violation_limit=config.system.latency_violation_limit,
         )
+        self._config_path = Path(config_path).expanduser() if config_path else None
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._restart_event: Optional[asyncio.Event] = None
+        self._restart_callback_logged = False
+        self._pending_restart = False
         self._latency_events: Deque[LatencyAlert] = deque()
         self._checkpoint_manager = CheckpointManager(
             config.storage.base_path / "checkpoint.json"
@@ -273,6 +282,7 @@ class Orchestrator:
                 f"{len(active)} active",
                 f"pool {len(monitored)}; {active_preview}",
                 "warning" if not active else "normal",
+                "running" if active else "inactive",
             )
         ]
 
@@ -283,6 +293,7 @@ class Orchestrator:
                 stream_state,
                 f"channel={self._connectivity.active_channel}",
                 "warning" if not self._api_token else "normal",
+                "running" if self._api_token else "inactive",
             )
         )
 
@@ -294,6 +305,7 @@ class Orchestrator:
                 "ACTIVE" if session_state.active else "PAUSED",
                 session_detail,
                 "warning" if not session_state.active else "normal",
+                "running" if session_state.active else "inactive",
             )
         )
 
@@ -307,6 +319,7 @@ class Orchestrator:
                 "HALTED" if manual_state.halted else "CLEAR",
                 override_detail,
                 "error" if manual_state.halted else "normal",
+                "error" if manual_state.halted else "running",
             )
         )
 
@@ -333,6 +346,7 @@ class Orchestrator:
                 "PRESSURE" if resource_severity == "warning" else "OK",
                 f"cpu={resource_snapshot.cpu_percent:.1f}% mem={resource_snapshot.memory_percent:.1f}% gpu={gpu_repr}",
                 resource_severity,
+                "running",
             )
         )
 
@@ -344,6 +358,7 @@ class Orchestrator:
                     f"levels={self._config.features.lob_levels};"
                     f"window={self._config.features.rolling_window}"
                 ),
+                status="running",
             )
         )
 
@@ -360,6 +375,7 @@ class Orchestrator:
                 ml_device,
                 f"throttle={self._ml_engine.throttle_delay * 1000:.0f}ms",
                 ml_severity,
+                "running" if self._ml_engine.device_mode else "inactive",
             )
         )
 
@@ -374,6 +390,7 @@ class Orchestrator:
                 fallback_state,
                 fallback_detail,
                 "warning" if not self._config.fallback.enabled else "normal",
+                "running" if self._config.fallback.enabled else "inactive",
             )
         )
 
@@ -390,7 +407,13 @@ class Orchestrator:
         if cooldown:
             risk_detail += f";cooldown_until={cooldown}"
         modules.append(
-            ModuleStatus("Risk engine", risk_state, risk_detail, risk_severity)
+            ModuleStatus(
+                "Risk engine",
+                risk_state,
+                risk_detail,
+                risk_severity,
+                "error" if risk_state == "HALTED" else "running",
+            )
         )
 
         exec_severity = "warning" if self._execution_engine.paper else "normal"
@@ -401,6 +424,7 @@ class Orchestrator:
                 self._execution_engine.mode.upper(),
                 f"mode={exec_detail}",
                 exec_severity,
+                "running" if not self._execution_engine.paper else "inactive",
             )
         )
 
@@ -408,7 +432,9 @@ class Orchestrator:
             f"signals={self._config.dashboard.repository_path.name};"
             f"history={self._config.storage.base_path}"
         )
-        modules.append(ModuleStatus("Storage", "READY", storage_detail))
+        modules.append(
+            ModuleStatus("Storage", "READY", storage_detail, status="running")
+        )
 
         connectivity = self._connectivity.snapshot()
         modules.append(
@@ -420,6 +446,7 @@ class Orchestrator:
                     f"success_streak={connectivity.get('success_streak', 0)}"
                 ),
                 "warning" if connectivity.get("failure_count", 0) else "normal",
+                "running",
             )
         )
 
@@ -435,6 +462,7 @@ class Orchestrator:
                 heartbeat_state,
                 heartbeat_detail,
                 "warning" if heartbeat_info.get("misses") else "normal",
+                "running" if heartbeat_info.get("enabled") else "inactive",
             )
         )
 
@@ -504,6 +532,22 @@ class Orchestrator:
             errors=errors,
             ensemble=self._ml_engine.ensemble_overview(),
         )
+
+    def request_restart(self) -> None:
+        """Signal that the orchestrator should restart after the current loop."""
+
+        if not self._restart_callback_logged:
+            LOGGER.warning("Dashboard requested orchestrator restart")
+            self._restart_callback_logged = True
+        self._pending_restart = True
+        event = self._restart_event
+        loop = self._loop
+        if event is None:
+            return
+        if loop is None:
+            event.set()
+        else:
+            loop.call_soon_threadsafe(event.set)
 
     def _restore_from_checkpoint(self) -> None:
         state = self._checkpoint_manager.load()
@@ -915,6 +959,11 @@ class Orchestrator:
             await asyncio.sleep(delay)
 
     async def run(self) -> None:
+        loop = asyncio.get_running_loop()
+        self._loop = loop
+        self._restart_event = asyncio.Event()
+        if self._pending_restart:
+            self._restart_event.set()
         self._start_dashboard_if_needed()
         await self._await_startup_window()
         interval = int(self._config.system.checkpoint_interval_seconds)
@@ -942,6 +991,7 @@ class Orchestrator:
                 delay=self._config.datafeed.reconnect_delay,
                 integrity_check=integrity_probe,
                 on_failure=self._handle_stream_failure,
+                stop_event=self._restart_event,
             ):
                 await self._process_latency_alerts()
                 snapshot, mitigations = self._resource_monitor.check_thresholds()
@@ -1173,6 +1223,8 @@ class Orchestrator:
             await self._process_latency_alerts()
             await self._persist_checkpoint()
             await self._performance_reporter.maybe_emit()
+        if self._restart_event and self._restart_event.is_set():
+            raise RestartRequested()
 
     def reload_models(self, model_dir: Path) -> None:
         """Reload quantised models and clear cached feature state."""
@@ -1195,6 +1247,8 @@ class Orchestrator:
                 headless=self._config.dashboard.headless,
                 title=self._config.dashboard.title,
                 background=True,
+                config_path=self._config_path,
+                restart_callback=self.request_restart,
             )
         except OSError as exc:
             LOGGER.error(
@@ -1215,47 +1269,62 @@ class Orchestrator:
 
 
 def run_from_yaml(path: str | Path) -> None:
-    config = load_config(path)
-    logging.basicConfig(level=getattr(logging, config.logging.level))
+    config_path = Path(path).expanduser()
+    first_iteration = True
 
-    token = (
-        config.datafeed.sandbox_token
-        if config.datafeed.use_sandbox
-        else config.datafeed.production_token
-    )
-    token_missing = is_placeholder_token(token)
-    allow_tokenless = bool(getattr(config.datafeed, "allow_tokenless", False))
-    requires_sdk = (
-        config.system.mode == "production"
-        or not allow_tokenless
-        or not token_missing
-    )
-
-    if requires_sdk:
-        try:
-            ensure_sdk_available()
-        except TinkoffSDKUnavailable as exc:
-            LOGGER.error(
-                "Cannot start orchestrator without the tinkoff-investments SDK: %s", exc
-            )
-            LOGGER.error(
-                "Install the bundled wheel via scripts/install_vendor.py or pip before running."
-            )
-            raise SystemExit(1) from exc
-    else:
-        try:
-            ensure_sdk_available()
-        except TinkoffSDKUnavailable:
-            LOGGER.warning(
-                "tinkoff-investments SDK not installed; continuing in offline mode."
-            )
+    while True:
+        config = load_config(config_path)
+        level = getattr(logging, config.logging.level)
+        if first_iteration:
+            logging.basicConfig(level=level)
+            first_iteration = False
         else:
-            LOGGER.info(
-                "tinkoff-investments SDK detected; offline mode may stream cached data."
-            )
+            logging.getLogger().setLevel(level)
 
-    orchestrator = Orchestrator(config)
-    asyncio.run(orchestrator.run())
+        token = (
+            config.datafeed.sandbox_token
+            if config.datafeed.use_sandbox
+            else config.datafeed.production_token
+        )
+        token_missing = is_placeholder_token(token)
+        allow_tokenless = bool(getattr(config.datafeed, "allow_tokenless", False))
+        requires_sdk = (
+            config.system.mode == "production"
+            or not allow_tokenless
+            or not token_missing
+        )
+
+        if requires_sdk:
+            try:
+                ensure_sdk_available()
+            except TinkoffSDKUnavailable as exc:
+                LOGGER.error(
+                    "Cannot start orchestrator without the tinkoff-investments SDK: %s",
+                    exc,
+                )
+                LOGGER.error(
+                    "Install the bundled wheel via scripts/install_vendor.py or pip before running."
+                )
+                raise SystemExit(1) from exc
+        else:
+            try:
+                ensure_sdk_available()
+            except TinkoffSDKUnavailable:
+                LOGGER.warning(
+                    "tinkoff-investments SDK not installed; continuing in offline mode."
+                )
+            else:
+                LOGGER.info(
+                    "tinkoff-investments SDK detected; offline mode may stream cached data."
+                )
+
+        orchestrator = Orchestrator(config, config_path=config_path)
+        try:
+            asyncio.run(orchestrator.run())
+        except RestartRequested:
+            LOGGER.info("Restart requested by dashboard; reloading configuration.")
+            continue
+        break
 
 
 __all__ = ["Orchestrator", "run_from_yaml"]

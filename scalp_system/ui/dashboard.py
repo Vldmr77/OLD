@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
+from ..config.token_prompt import store_tokens, token_status
 from ..storage.repository import SQLiteRepository
 
 LOGGER = logging.getLogger(__name__)
@@ -28,6 +29,7 @@ class ModuleStatus:
     state: str
     detail: str = ""
     severity: str = "normal"  # one of {normal, warning, error}
+    status: str = "running"  # one of {running, inactive, error}
 
 
 @dataclass
@@ -61,6 +63,10 @@ class DashboardUI:
         signal_limit: int = 25,
         headless: bool = False,
         title: str = "Scalp System Dashboard",
+        config_path: Optional[Path] = None,
+        restart_callback: Optional[Callable[[], None]] = None,
+        token_status_provider: Optional[Callable[[], dict[str, bool]]] = None,
+        token_writer: Optional[Callable[[Optional[str], Optional[str]], bool]] = None,
     ) -> None:
         self._repository = repository
         self._status_provider = status_provider
@@ -72,6 +78,23 @@ class DashboardUI:
         self._closed = False
         self._status_error: Optional[str] = None
         self._root = None
+        self._config_path = Path(config_path).expanduser() if config_path else None
+        if token_status_provider is None and self._config_path is not None:
+            token_status_provider = lambda: token_status(self._config_path)
+        self._token_status_provider = token_status_provider
+        if token_writer is None and self._config_path is not None:
+            token_writer = lambda sandbox, production: store_tokens(
+                self._config_path, sandbox=sandbox, production=production
+            )
+        self._token_writer = token_writer
+        self._restart_callback = restart_callback
+        self._module_badge_frame = None
+        self._sandbox_entry = None
+        self._production_entry = None
+        self._sandbox_status_label = None
+        self._production_status_label = None
+        self._token_feedback_label = None
+        self._token_status: dict[str, bool] = {"sandbox": False, "production": False}
 
     # ------------------------------------------------------------------
     # Public API
@@ -176,6 +199,27 @@ class DashboardUI:
             padding=(8, 4),
         )
         style.configure(
+            "Dashboard.ModuleBadgeRunning.TLabel",
+            background="#14532d",
+            foreground="#bbf7d0",
+            font=("Segoe UI", 11, "bold"),
+            padding=(10, 6),
+        )
+        style.configure(
+            "Dashboard.ModuleBadgeInactive.TLabel",
+            background="#334155",
+            foreground="#cbd5f5",
+            font=("Segoe UI", 11, "bold"),
+            padding=(10, 6),
+        )
+        style.configure(
+            "Dashboard.ModuleBadgeError.TLabel",
+            background="#7f1d1d",
+            foreground="#fecaca",
+            font=("Segoe UI", 11, "bold"),
+            padding=(10, 6),
+        )
+        style.configure(
             "Dashboard.Treeview",
             background="#1e293b",
             fieldbackground="#1e293b",
@@ -210,6 +254,85 @@ class DashboardUI:
         )
         self._summary_label.pack(anchor="w", pady=(4, 12))
 
+        self._module_badge_frame = ttk.Frame(
+            container, style="Dashboard.TFrame"
+        )  # type: ignore[arg-type]
+        self._module_badge_frame.pack(fill="x", pady=(0, 12))
+
+        token_frame = ttk.Frame(
+            container, style="Dashboard.TFrame"
+        )  # type: ignore[arg-type]
+        token_frame.pack(fill="x", pady=(0, 16))
+        token_frame.columnconfigure(1, weight=1)
+        tokens_label = ttk.Label(
+            token_frame,
+            text="Tinkoff API tokens",
+            style="Dashboard.TLabel",
+        )
+        tokens_label.grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            token_frame,
+            text="Sandbox",
+            style="Dashboard.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self._sandbox_entry = ttk.Entry(token_frame, show="•")
+        self._sandbox_entry.grid(row=1, column=1, sticky="we", padx=(8, 8), pady=(6, 0))
+        self._bind_copy_paste(self._sandbox_entry)
+        self._sandbox_status_label = ttk.Label(
+            token_frame,
+            text="Sandbox: unknown",
+            style="Dashboard.TLabel",
+        )
+        self._sandbox_status_label.grid(row=1, column=2, sticky="w", pady=(6, 0))
+
+        ttk.Label(
+            token_frame,
+            text="Production",
+            style="Dashboard.TLabel",
+        ).grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self._production_entry = ttk.Entry(token_frame, show="•")
+        self._production_entry.grid(
+            row=2, column=1, sticky="we", padx=(8, 8), pady=(6, 0)
+        )
+        self._bind_copy_paste(self._production_entry)
+        self._production_status_label = ttk.Label(
+            token_frame,
+            text="Production: unknown",
+            style="Dashboard.TLabel",
+        )
+        self._production_status_label.grid(row=2, column=2, sticky="w", pady=(6, 0))
+
+        button_frame = ttk.Frame(
+            token_frame, style="Dashboard.TFrame"
+        )  # type: ignore[arg-type]
+        button_frame.grid(row=0, column=3, rowspan=3, sticky="e", padx=(16, 0))
+
+        apply_button = ttk.Button(
+            button_frame,
+            text="Save tokens",
+            command=self._apply_tokens,
+        )
+        apply_button.pack(anchor="e", pady=(6, 4))
+
+        restart_button = ttk.Button(
+            button_frame,
+            text="Restart system",
+            command=self._restart_system,
+        )
+        if self._restart_callback is None:
+            restart_button.state(["disabled"])
+        restart_button.pack(anchor="e")
+
+        self._token_feedback_label = ttk.Label(
+            token_frame,
+            text="",
+            style="Dashboard.TLabel",
+        )
+        self._token_feedback_label.grid(
+            row=3, column=0, columnspan=4, sticky="w", pady=(6, 0)
+        )
+
         top_split = ttk.Frame(container, style="Dashboard.TFrame")  # type: ignore[arg-type]
         top_split.pack(fill="x")
 
@@ -235,6 +358,8 @@ class DashboardUI:
         self._module_tree.column("state", width=140, anchor="center")
         self._module_tree.column("detail", width=320, anchor="w")
         self._module_tree.pack(fill="both", expand=True, pady=(4, 0))
+        self._module_tree.tag_configure("running", foreground="#22c55e")
+        self._module_tree.tag_configure("inactive", foreground="#94a3b8")
         self._module_tree.tag_configure("warning", foreground="#facc15")
         self._module_tree.tag_configure("error", foreground="#f87171")
 
@@ -340,24 +465,52 @@ class DashboardUI:
         self._summary_label.config(
             text=f"Signals stored: {total} — {latest_line}"
         )
+        self._update_module_badges(snapshot.status.modules)
         self._update_module_tree(snapshot.status.modules)
         self._update_process_list(snapshot.status.processes)
         self._update_errors(snapshot.status.errors)
         self._update_signals(snapshot.signals)
         self._update_ensemble(snapshot.status.ensemble)
+        self._refresh_token_status()
 
     def _update_module_tree(self, modules: Iterable[ModuleStatus]) -> None:
         self._module_tree.delete(*self._module_tree.get_children())
         for module in modules:
-            tags = ()
-            if module.severity in {"warning", "error"}:
-                tags = (module.severity,)
+            if module.severity == "error" or module.status == "error":
+                tags = ("error",)
+            elif module.severity == "warning":
+                tags = ("warning",)
+            elif module.status == "inactive":
+                tags = ("inactive",)
+            else:
+                tags = ("running",)
             self._module_tree.insert(
                 "",
                 "end",
                 values=(module.name, f"{module.state}", module.detail),
                 tags=tags,
             )
+
+    def _update_module_badges(self, modules: Iterable[ModuleStatus]) -> None:
+        if self._module_badge_frame is None:
+            return
+        for child in self._module_badge_frame.winfo_children():
+            child.destroy()
+        for module in modules:
+            style_name = self._badge_style(module)
+            label = ttk.Label(
+                self._module_badge_frame,
+                text=module.name,
+                style=style_name,
+            )
+            label.pack(side="left", padx=(0, 8), pady=(0, 4))
+
+    def _badge_style(self, module: ModuleStatus) -> str:
+        if module.severity == "error" or module.status == "error":
+            return "Dashboard.ModuleBadgeError.TLabel"
+        if module.status == "inactive":
+            return "Dashboard.ModuleBadgeInactive.TLabel"
+        return "Dashboard.ModuleBadgeRunning.TLabel"
 
     def _update_process_list(self, processes: Iterable[str]) -> None:
         self._process_list.delete(0, tk.END)
@@ -462,6 +615,114 @@ class DashboardUI:
         self._build_layout()
         self._root.protocol("WM_DELETE_WINDOW", self._on_close)
 
+    def _refresh_token_status(self) -> None:
+        if self._sandbox_status_label is None or self._production_status_label is None:
+            return
+        if self._token_status_provider is None:
+            self._sandbox_status_label.config(
+                text="Sandbox: unavailable", foreground="#facc15"
+            )
+            self._production_status_label.config(
+                text="Production: unavailable", foreground="#facc15"
+            )
+            return
+        try:
+            status = self._token_status_provider() or {}
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.exception("Failed to read token status: %s", exc)
+            self._set_feedback(f"Token status error: {exc}", "#f87171")
+            self._sandbox_status_label.config(
+                text="Sandbox: error", foreground="#f87171"
+            )
+            self._production_status_label.config(
+                text="Production: error", foreground="#f87171"
+            )
+            return
+        sandbox = bool(status.get("sandbox"))
+        production = bool(status.get("production"))
+        self._token_status = {"sandbox": sandbox, "production": production}
+        self._sandbox_status_label.config(
+            text=("Sandbox: configured" if sandbox else "Sandbox: missing"),
+            foreground="#22c55e" if sandbox else "#f87171",
+        )
+        self._production_status_label.config(
+            text=("Production: configured" if production else "Production: missing"),
+            foreground="#22c55e" if production else "#f87171",
+        )
+
+    def _apply_tokens(self) -> None:
+        if self._token_writer is None:
+            self._set_feedback("Token updates are unavailable without a config path.", "#facc15")
+            return
+        if self._sandbox_entry is None or self._production_entry is None:
+            return
+        sandbox_raw = self._sandbox_entry.get().strip()
+        production_raw = self._production_entry.get().strip()
+        if not sandbox_raw and not production_raw:
+            self._set_feedback("Enter at least one token to save.", "#facc15")
+            return
+        try:
+            updated = self._token_writer(
+                sandbox_raw or None,
+                production_raw or None,
+            )
+        except Exception as exc:  # pragma: no cover - file system guard
+            LOGGER.exception("Failed to store tokens: %s", exc)
+            self._set_feedback(f"Failed to store tokens: {exc}", "#f87171")
+            return
+        finally:
+            self._sandbox_entry.delete(0, tk.END)
+            self._production_entry.delete(0, tk.END)
+        if updated:
+            self._set_feedback("Tokens updated.", "#22c55e")
+        else:
+            self._set_feedback("No changes detected.", "#facc15")
+        self._refresh_token_status()
+
+    def _restart_system(self) -> None:
+        if self._restart_callback is None:
+            self._set_feedback("Restart is unavailable in this mode.", "#facc15")
+            return
+        try:
+            self._restart_callback()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.exception("Failed to request orchestrator restart: %s", exc)
+            self._set_feedback(f"Failed to request restart: {exc}", "#f87171")
+            return
+        self._set_feedback("Restart requested.", "#22c55e")
+
+    def _set_feedback(self, message: str, colour: str = "#e2e8f0") -> None:
+        if self._token_feedback_label is None:
+            return
+        self._token_feedback_label.config(text=message, foreground=colour)
+
+    def _bind_copy_paste(self, widget) -> None:
+        if tk is None:
+            return
+
+        def _copy(event):
+            try:
+                text = widget.selection_get()
+            except tk.TclError:
+                return "break"
+            widget.clipboard_clear()
+            widget.clipboard_append(text)
+            return "break"
+
+        def _paste(event):
+            try:
+                text = widget.clipboard_get()
+            except tk.TclError:
+                return "break"
+            widget.delete(0, tk.END)
+            widget.insert(tk.INSERT, text)
+            return "break"
+
+        for sequence in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>"):
+            widget.bind(sequence, _copy)
+        for sequence in ("<Control-v>", "<Control-V>", "<Command-v>", "<Command-V>"):
+            widget.bind(sequence, _paste)
+
 
 def run_dashboard(
     repository_path: Path,
@@ -472,6 +733,10 @@ def run_dashboard(
     background: bool = False,
     headless: bool = False,
     title: str = "Scalp System Dashboard",
+    config_path: Optional[Path] = None,
+    restart_callback: Optional[Callable[[], None]] = None,
+    token_status_provider: Optional[Callable[[], dict[str, bool]]] = None,
+    token_writer: Optional[Callable[[Optional[str], Optional[str]], bool]] = None,
 ) -> Optional[threading.Thread]:
     """Launch the Tkinter dashboard.
 
@@ -488,6 +753,10 @@ def run_dashboard(
             signal_limit=signal_limit,
             headless=headless,
             title=title,
+            config_path=config_path,
+            restart_callback=restart_callback,
+            token_status_provider=token_status_provider,
+            token_writer=token_writer,
         )
         ui.run()
 

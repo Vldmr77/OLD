@@ -37,6 +37,11 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Run without opening a Tk window (useful for tests)",
     )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        help="Optional path to the YAML configuration for token management",
+    )
     args = parser.parse_args(argv)
 
     run_dashboard(
@@ -45,6 +50,7 @@ def main(argv: list[str] | None = None) -> None:
         signal_limit=args.signal_limit,
         title=args.title,
         headless=args.headless,
+        config_path=args.config,
     )
 
 
