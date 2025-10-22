@@ -384,6 +384,18 @@ class Orchestrator:
         return func()
 
     def dashboard_status(self) -> dict:
+        try:
+            return self._build_dashboard_status()
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            LOGGER.exception("Failed to build dashboard status: %s", exc)
+            return {
+                "error": {
+                    "source": "orchestrator.dashboard_status",
+                    "message": str(exc),
+                }
+            }
+
+    def _build_dashboard_status(self) -> dict:
         data_snapshot = self._data_engine.snapshot()
         active = data_snapshot.get("active_instruments", [])
         monitored = data_snapshot.get("monitored_instruments", [])
