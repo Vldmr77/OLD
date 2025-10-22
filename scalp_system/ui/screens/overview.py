@@ -38,15 +38,48 @@ class OverviewScreen:
         self._context = context
         self._frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(self._frame, text=context.strings["tab_overview"])
+        self._frame.columnconfigure(0, weight=1)
+        self._frame.columnconfigure(1, weight=1)
+        self._frame.rowconfigure(1, weight=2)
+        self._frame.rowconfigure(3, weight=3)
+
         self._state: State = context.state
         self._graph = StatusGraph(self._frame)
-        self._graph.pack(fill="x", padx=8, pady=12)
+        self._graph.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
 
-        modules_frame = create_section(self._frame, RU["module_header"])
+        modules_frame = create_section(self._frame, RU["module_header"], pack=False)
+        modules_frame.grid(row=1, column=0, columnspan=2, sticky="nsew", padx=8, pady=6)
         self._module_table = SimpleTable(modules_frame, ["module", "state", "detail"], height=6)
         self._module_table.pack(fill="both", expand=True)
 
-        signals_frame = create_section(self._frame, RU["signals_header"])
+        metrics_frame = create_section(self._frame, RU["metrics_header"], pack=False)
+        metrics_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=6)
+        self._metrics = KeyValueMeter(metrics_frame)
+        self._metrics.pack(anchor="w", padx=8, pady=4)
+
+        actions = ttk.Frame(self._frame, style="Dashboard.Section.TFrame")
+        actions.grid(row=2, column=1, sticky="ew", padx=8, pady=6)
+        self._buttons: list[tuple[object, bool]] = []
+        for idx, (text_key, command, requires_bus) in enumerate(
+            [
+                ("btn_restart", "system.restart", True),
+                ("btn_pause", "system.pause", True),
+                ("btn_resume", "system.resume", True),
+                ("btn_reset_risk", "risk.reset_stops", True),
+                ("btn_refresh", None, False),
+            ]
+        ):
+            btn = ttk.Button(
+                actions,
+                text=RU[text_key],
+                command=(lambda cmd=command: self._context.emit(cmd)),
+            )
+            btn.grid(row=0, column=idx, padx=4, pady=4, sticky="ew")
+            actions.columnconfigure(idx, weight=1)
+            self._buttons.append((btn, requires_bus))
+
+        signals_frame = create_section(self._frame, RU["signals_header"], pack=False)
+        signals_frame.grid(row=3, column=0, sticky="nsew", padx=8, pady=6)
         self._signals_table = SimpleTable(
             signals_frame,
             ["figi", "score", "timestamp"],
@@ -54,35 +87,14 @@ class OverviewScreen:
         )
         self._signals_table.pack(fill="both", expand=True)
 
-        orders_frame = create_section(self._frame, RU["orders_header"])
+        orders_frame = create_section(self._frame, RU["orders_header"], pack=False)
+        orders_frame.grid(row=3, column=1, sticky="nsew", padx=8, pady=6)
         self._orders_table = SimpleTable(
             orders_frame,
             ["order_id", "figi", "status", "price"],
             height=6,
         )
         self._orders_table.pack(fill="both", expand=True)
-
-        metrics_frame = create_section(self._frame, RU["metrics_header"])
-        self._metrics = KeyValueMeter(metrics_frame)
-        self._metrics.pack(anchor="w", padx=8, pady=4)
-
-        actions = ttk.Frame(self._frame, style="Dashboard.Section.TFrame")
-        actions.pack(fill="x", padx=8, pady=4)
-        self._buttons: list[tuple[object, bool]] = []
-        for text_key, command, requires_bus in [
-            ("btn_restart", "system.restart", True),
-            ("btn_pause", "system.pause", True),
-            ("btn_resume", "system.resume", True),
-            ("btn_reset_risk", "risk.reset_stops", True),
-            ("btn_refresh", None, False),
-        ]:
-            btn = ttk.Button(
-                actions,
-                text=RU[text_key],
-                command=(lambda cmd=command: self._context.emit(cmd)),
-            )
-            btn.pack(side="left", padx=4, pady=4)
-            self._buttons.append((btn, requires_bus))
 
     def update(self) -> None:
         if ttk is None:

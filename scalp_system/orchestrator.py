@@ -1968,6 +1968,15 @@ class Orchestrator:
                 "--status-endpoint",
                 status_endpoint,
             ]
+            if self._event_bus is not None:
+                args.extend(
+                    [
+                        "--bus-host",
+                        self._config.bus.host,
+                        "--bus-port",
+                        str(self._event_bus.port),
+                    ]
+                )
             if self._config_path:
                 args.extend(["--config", str(Path(self._config_path).expanduser().resolve())])
             try:

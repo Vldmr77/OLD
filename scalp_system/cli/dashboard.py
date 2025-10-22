@@ -53,6 +53,15 @@ def main(argv: list[str] | None = None) -> None:
         "--status-endpoint",
         help="Optional HTTP endpoint that exposes orchestrator status",
     )
+    parser.add_argument(
+        "--bus-host",
+        help="Override control bus host (defaults to config)",
+    )
+    parser.add_argument(
+        "--bus-port",
+        type=int,
+        help="Override control bus port (defaults to config)",
+    )
     args = parser.parse_args(argv)
 
     config_path = args.config
@@ -60,16 +69,19 @@ def main(argv: list[str] | None = None) -> None:
         config_path = config_loader._discover_default_path()
     cfg = load_config(config_path)
 
-    bus_client: BusClient | None = None
+    bus_address: tuple[str, int] | None = None
     if cfg.bus.enabled:
-        candidate = BusClient(host=cfg.bus.host, port=cfg.bus.port)
+        bus_host = args.bus_host or cfg.bus.host
+        bus_port = args.bus_port or cfg.bus.port
+        bus_address = (bus_host, bus_port)
+        candidate = BusClient(host=bus_host, port=bus_port)
         if candidate.check_available():
-            bus_client = candidate
+            LOGGER.debug("Control bus reachable at %s:%s", bus_host, bus_port)
         else:
             LOGGER.warning(
-                "Control bus unavailable at %s:%s; dashboard controls disabled",
-                cfg.bus.host,
-                cfg.bus.port,
+                "Control bus unavailable at %s:%s; controls will retry in UI",
+                bus_host,
+                bus_port,
             )
 
     def _token_writer(sandbox: str | None, production: str | None) -> bool:
@@ -95,9 +107,7 @@ def main(argv: list[str] | None = None) -> None:
         config_path=config_path,
         token_writer=_token_writer,
         token_status_provider=_token_status,
-        bus_address=(cfg.bus.host, cfg.bus.port)
-        if bus_client is not None
-        else None,
+        bus_address=bus_address,
         status_endpoint=args.status_endpoint,
     )
 
