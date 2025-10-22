@@ -197,6 +197,7 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
     monkeypatch.setenv("DISPLAY", ":0")
 
     captured: dict[str, object] = {}
+    status_calls: dict[str, object] = {}
 
     class DummyProcess:
         def __init__(self, args: list[str]):
@@ -219,8 +220,29 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
         captured["kwargs"] = kwargs
         return DummyProcess(args)
 
+    class DummyStatusServer:
+        def __init__(self, host: str, port: int, status_provider):
+            status_calls["host"] = host
+            status_calls["port"] = port
+            status_calls["provider"] = status_provider
+            status_calls["start_count"] = 0
+            self._endpoint = f"http://{host}:{port}/status"
+
+        def start(self) -> None:
+            status_calls["start_count"] = status_calls.get("start_count", 0) + 1
+
+        def stop(self) -> None:
+            status_calls["stopped"] = True
+
+        @property
+        def status_endpoint(self) -> str:
+            return self._endpoint
+
     monkeypatch.setattr("scalp_system.orchestrator.subprocess.Popen", fake_popen)
     monkeypatch.setattr("scalp_system.orchestrator.sys.executable", sys.executable)
+    monkeypatch.setattr(
+        "scalp_system.orchestrator.DashboardStatusServer", DummyStatusServer
+    )
 
     orchestrator = Orchestrator(config, config_path=tmp_path / "config.yaml")
     orchestrator._start_dashboard_if_needed()
@@ -228,6 +250,10 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
     assert captured["args"][0] == sys.executable
     assert "scalp_system.cli.dashboard" in captured["args"]
     assert "--repository" in captured["args"]
+    assert "--status-endpoint" in captured["args"]
+    idx = captured["args"].index("--status-endpoint")
+    assert captured["args"][idx + 1] == "http://127.0.0.1:5000/status"
+    assert status_calls["start_count"] == 1
 
 
 def test_orchestrator_skips_dashboard_when_no_display(monkeypatch, tmp_path, caplog):

@@ -23,6 +23,7 @@ from .config.base import OrchestratorConfig
 from .config.editor import set_operational_mode, update_instrument_lists
 from .config.loader import load_config
 from .control.bus import EventBus
+from .control.status_server import DashboardStatusServer
 from .control.manual_override import ManualOverrideGuard
 from .control.session import SessionGuard
 from .data.engine import DataEngine
@@ -188,6 +189,7 @@ class Orchestrator:
         self._risk_task_labels: dict[asyncio.Task, str] = {}
         self._dashboard_thread: Optional[Thread] = None
         self._dashboard_process: Optional[subprocess.Popen[str]] = None
+        self._status_server: Optional[DashboardStatusServer] = None
         self._operation_lock = Lock()
         self._active_backtests = 0
         self._active_manual_training = 0
@@ -663,8 +665,8 @@ class Orchestrator:
         risk_params = {
             "max_position": self._config.risk.max_position,
             "max_exposure_pct": self._config.risk.max_exposure_pct,
-            "daily_stop": daily_stop_value,
-            "daily_stop_pct": risk_limit_pct,
+            "daily_loss_limit": daily_stop_value,
+            "daily_loss_limit_pct": risk_limit_pct,
         }
 
         execution_info = {
@@ -1898,6 +1900,21 @@ class Orchestrator:
                     self._dashboard_process.kill()
             finally:
                 self._dashboard_process = None
+        if self._status_server is not None:
+            self._status_server.stop()
+            self._status_server = None
+
+    def _ensure_status_server(self) -> str:
+        if self._status_server is None:
+            host = self._config.dashboard.host or "127.0.0.1"
+            port = int(self._config.dashboard.port or 0)
+            self._status_server = DashboardStatusServer(
+                host=host,
+                port=port,
+                status_provider=self.dashboard_status,
+            )
+        self._status_server.start()
+        return self._status_server.status_endpoint
 
     @staticmethod
     def _display_available() -> bool:
@@ -1935,6 +1952,7 @@ class Orchestrator:
                 base_dir = Path(self._config_path).expanduser().resolve().parent
             if not repo_path.is_absolute():
                 repo_path = (base_dir / repo_path).resolve()
+            status_endpoint = self._ensure_status_server()
             args = [
                 python_exe,
                 "-m",
@@ -1947,6 +1965,8 @@ class Orchestrator:
                 str(self._config.dashboard.signal_limit),
                 "--title",
                 self._config.dashboard.title,
+                "--status-endpoint",
+                status_endpoint,
             ]
             if self._config_path:
                 args.extend(["--config", str(Path(self._config_path).expanduser().resolve())])

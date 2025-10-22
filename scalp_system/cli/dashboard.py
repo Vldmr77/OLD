@@ -49,6 +49,10 @@ def main(argv: list[str] | None = None) -> None:
         type=Path,
         help="Optional path to the YAML configuration for token management",
     )
+    parser.add_argument(
+        "--status-endpoint",
+        help="Optional HTTP endpoint that exposes orchestrator status",
+    )
     args = parser.parse_args(argv)
 
     config_path = args.config
@@ -94,6 +98,7 @@ def main(argv: list[str] | None = None) -> None:
         bus_address=(cfg.bus.host, cfg.bus.port)
         if bus_client is not None
         else None,
+        status_endpoint=args.status_endpoint,
     )
 
 
