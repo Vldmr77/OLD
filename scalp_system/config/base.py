@@ -209,6 +209,29 @@ class StorageConfig:
 
 
 @dataclass
+class DashboardConfig:
+    auto_start: bool = True
+    host: str = "127.0.0.1"
+    port: int = 5000
+    repository_path: Path = Path("./runtime/signals.db")
+
+    def ensure(self, default_base: Path | None = None) -> None:
+        self.auto_start = bool(self.auto_start)
+        self.host = str(self.host or "127.0.0.1")
+        try:
+            self.port = max(1, int(self.port))
+        except (TypeError, ValueError):
+            self.port = 5000
+        if not isinstance(self.repository_path, Path):
+            self.repository_path = Path(self.repository_path).expanduser()
+        else:
+            self.repository_path = self.repository_path.expanduser()
+        if default_base is not None and self.repository_path == Path("./runtime/signals.db"):
+            self.repository_path = default_base / "signals.db"
+        self.repository_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass
 class MonitoringConfig:
     cpu_soft_limit: float = 90.0
     memory_soft_limit: float = 90.0
@@ -460,6 +483,7 @@ class OrchestratorConfig:
     risk_schedule: RiskScheduleConfig = field(default_factory=RiskScheduleConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
@@ -478,6 +502,7 @@ class OrchestratorConfig:
 
     def __post_init__(self) -> None:
         self.storage.ensure()
+        self.dashboard.ensure(default_base=self.storage.base_path)
         self.datafeed.ensure()
         self.ml.ensure()
         self.risk.ensure()
@@ -510,6 +535,7 @@ class OrchestratorConfig:
         disaster_data = _ensure_dict(data.get("disaster_recovery", {}))
         session_data = _ensure_dict(data.get("session", {}))
         risk_schedule_data = _ensure_dict(data.get("risk_schedule", {}))
+        dashboard_data = _ensure_dict(data.get("dashboard", {}))
         ml_data = _ensure_dict(data.get("ml", {}))
         weights_data = _ensure_dict(ml_data.get("weights", {}))
         class_weights_data = ml_data.get("class_weights", {})
@@ -536,6 +562,7 @@ class OrchestratorConfig:
             risk_schedule=RiskScheduleConfig(**risk_schedule_data),
             execution=ExecutionConfig(**_ensure_dict(data.get("execution", {}))),
             storage=StorageConfig(**_ensure_dict(data.get("storage", {}))),
+            dashboard=DashboardConfig(**dashboard_data),
             monitoring=MonitoringConfig(
                 cpu_soft_limit=monitoring_data.get("cpu_soft_limit", 90.0),
                 memory_soft_limit=monitoring_data.get("memory_soft_limit", 90.0),
@@ -685,6 +712,7 @@ __all__ = [
     "RiskLimits",
     "ExecutionConfig",
     "StorageConfig",
+    "DashboardConfig",
     "MonitoringConfig",
     "NotificationConfig",
     "FallbackConfig",

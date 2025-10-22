@@ -8,6 +8,7 @@ from collections import deque
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from threading import Thread
 from typing import Callable, Deque, Optional
 
 from .broker.tinkoff import (
@@ -45,6 +46,7 @@ from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
 from .config.token_prompt import is_placeholder_token
+from .ui import run_dashboard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -58,7 +60,7 @@ class Orchestrator:
         self._risk_schedule = config.risk_schedule
         self._metrics = MetricsRegistry()
         self._repository = SQLiteRepository(
-            config.storage.base_path / "signals.db",
+            config.dashboard.repository_path,
             cache_min_interval=config.storage.cache_flush_min_seconds,
             cache_max_interval=config.storage.cache_flush_max_seconds,
             cache_target_buffer=config.storage.cache_target_buffer,
@@ -156,6 +158,7 @@ class Orchestrator:
         )
         self._training_task: Optional[asyncio.Task] = None
         self._risk_tasks: list[asyncio.Task] = []
+        self._dashboard_thread: Optional[Thread] = None
 
     def _resolve_api_token(self) -> Optional[str]:
         token = (
@@ -640,6 +643,7 @@ class Orchestrator:
             await asyncio.sleep(delay)
 
     async def run(self) -> None:
+        self._start_dashboard_if_needed()
         await self._await_startup_window()
         interval = int(self._config.system.checkpoint_interval_seconds)
         if interval > 0:
@@ -899,6 +903,39 @@ class Orchestrator:
         self._feature_pipeline.reset_cache()
         self._ml_engine.reload_models(model_dir)
         self._risk_engine.notify_model_reload()
+
+    def _start_dashboard_if_needed(self) -> None:
+        if self._dashboard_thread is not None:
+            return
+        if not self._config.dashboard.auto_start:
+            return
+        host = self._config.dashboard.host
+        port = int(self._config.dashboard.port)
+        try:
+            thread = run_dashboard(
+                self._config.dashboard.repository_path,
+                host=host,
+                port=port,
+                background=True,
+            )
+        except OSError as exc:
+            LOGGER.error(
+                "Failed to launch dashboard UI on %s:%s: %s", host, port, exc
+            )
+            self._audit_logger.log(
+                "UI",
+                "DASHBOARD_ERROR",
+                f"host={host};port={port};error={exc}",
+            )
+            return
+        if thread is None:
+            LOGGER.warning("Dashboard launcher returned no thread; UI not started")
+            return
+        self._dashboard_thread = thread
+        LOGGER.info("Dashboard UI started on http://%s:%s", host, port)
+        self._audit_logger.log(
+            "UI", "DASHBOARD_STARTED", f"host={host};port={port}"
+        )
 
 
 def run_from_yaml(path: str | Path) -> None:
