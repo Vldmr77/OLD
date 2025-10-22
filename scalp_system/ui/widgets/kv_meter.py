@@ -22,7 +22,7 @@ class KeyValueMeter(ttk.Frame):  # type: ignore[misc]
             widget.destroy()
 
         for index, (name, value) in enumerate(metrics.items()):
-            row, column = divmod(index, 3)
+            row, column = 0, index
             card = ttk.Frame(self, style="DashboardBadge.TFrame")
             card.grid(row=row, column=column, padx=6, pady=6, sticky="nsew")
             title = ttk.Label(card, text=str(name).upper(), style="DashboardBadge.Title.TLabel")
@@ -31,8 +31,7 @@ class KeyValueMeter(ttk.Frame):  # type: ignore[misc]
             value_label.pack(anchor="w", pady=(2, 0))
             self._cards[name] = (title, value_label)
 
-        max_columns = max(1, min(3, len(metrics)))
-        for column in range(max_columns):
+        for column in range(len(metrics)):
             self.columnconfigure(column, weight=1)
 
 
