@@ -1,4 +1,6 @@
 import json
+import socket
+from urllib.parse import urlparse
 from urllib.error import HTTPError
 from urllib.request import urlopen
 
@@ -34,3 +36,25 @@ def test_status_server_reports_provider_errors():
         assert "status_provider" in body
     finally:
         server.stop()
+
+
+def test_status_server_rebinds_when_port_in_use():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    occupied_port = sock.getsockname()[1]
+
+    server = DashboardStatusServer(
+        host="127.0.0.1",
+        port=occupied_port,
+        status_provider=lambda: {"ok": True},
+    )
+    server.start()
+    try:
+        parsed = urlparse(server.status_endpoint)
+        assert parsed.port != occupied_port
+        with urlopen(server.health_endpoint, timeout=2) as response:
+            payload = json.load(response)
+        assert payload == {"status": "ok"}
+    finally:
+        server.stop()
+        sock.close()

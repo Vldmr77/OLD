@@ -1,6 +1,7 @@
 """Lightweight TCP event bus for orchestrator control commands."""
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import socket
@@ -74,8 +75,20 @@ class EventBus:
         class _Server(ThreadingTCPServer):
             allow_reuse_address = True
 
-        server = _Server((self._host, self._port), _RequestHandler)
+        try:
+            server = _Server((self._host, self._port), _RequestHandler)
+        except OSError as exc:
+            if self._port and exc.errno in {errno.EADDRINUSE, errno.EACCES}:
+                LOGGER.warning(
+                    "Event bus port %s unavailable (%s); retrying on an ephemeral port.",
+                    self._port,
+                    exc,
+                )
+                server = _Server((self._host, 0), _RequestHandler)
+            else:
+                raise
         self._server = server
+        self._port = int(server.server_address[1])
 
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import threading
@@ -85,8 +86,23 @@ class DashboardStatusServer:
                 self.end_headers()
                 self.wfile.write(body)
 
-        server = ThreadingHTTPServer((self._host, self._port), _Handler)
+        class _Server(ThreadingHTTPServer):
+            allow_reuse_address = True
+
+        try:
+            server = _Server((self._host, self._port), _Handler)
+        except OSError as exc:
+            if self._port and exc.errno in {errno.EADDRINUSE, errno.EACCES}:
+                LOGGER.warning(
+                    "Dashboard status port %s unavailable (%s); retrying on an ephemeral port.",
+                    self._port,
+                    exc,
+                )
+                server = _Server((self._host, 0), _Handler)
+            else:
+                raise
         self._server = server
+        self._port = int(server.server_address[1])
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self._thread = thread

@@ -1,3 +1,4 @@
+import socket
 import time
 
 from scalp_system.control.bus import BusClient, Event, EventBus
@@ -27,3 +28,18 @@ def test_bus_client_reports_unavailable_port():
     bus.stop()
     client = BusClient(host="127.0.0.1", port=port)
     assert client.check_available() is False
+
+
+def test_event_bus_rebinds_when_port_in_use():
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    occupied_port = sock.getsockname()[1]
+    bus = EventBus(host="127.0.0.1", port=occupied_port)
+    bus.start()
+    try:
+        assert bus.port != occupied_port
+        client = BusClient(host="127.0.0.1", port=bus.port)
+        assert client.check_available()
+    finally:
+        bus.stop()
+        sock.close()
