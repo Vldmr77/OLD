@@ -47,7 +47,7 @@ from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
 from .config.token_prompt import is_placeholder_token
-from .ui import run_dashboard
+from .ui import DashboardStatus, ModuleStatus, run_dashboard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -168,6 +168,7 @@ class Orchestrator:
         )
         self._training_task: Optional[asyncio.Task] = None
         self._risk_tasks: list[asyncio.Task] = []
+        self._risk_task_labels: dict[asyncio.Task, str] = {}
         self._dashboard_thread: Optional[Thread] = None
 
     def _resolve_api_token(self) -> Optional[str]:
@@ -256,6 +257,253 @@ class Orchestrator:
         alert = self._latency_monitor.observe(stage, latency_ms)
         if alert:
             self._latency_events.append(alert)
+
+    def dashboard_status(self) -> DashboardStatus:
+        data_snapshot = self._data_engine.snapshot()
+        active = data_snapshot.get("active_instruments", [])
+        monitored = data_snapshot.get("monitored_instruments", [])
+        active_preview = ", ".join(active[:4])
+        if len(active) > 4:
+            active_preview += f" … (+{len(active) - 4})"
+        elif not active_preview:
+            active_preview = "No active instruments"
+        modules: list[ModuleStatus] = [
+            ModuleStatus(
+                "Data engine",
+                f"{len(active)} active",
+                f"pool {len(monitored)}; {active_preview}",
+                "warning" if not active else "normal",
+            )
+        ]
+
+        stream_state = "LIVE" if self._api_token else "OFFLINE"
+        modules.append(
+            ModuleStatus(
+                "Market stream",
+                stream_state,
+                f"channel={self._connectivity.active_channel}",
+                "warning" if not self._api_token else "normal",
+            )
+        )
+
+        session_state = self._session_guard.evaluate()
+        session_detail = session_state.reason or "within window"
+        modules.append(
+            ModuleStatus(
+                "Session schedule",
+                "ACTIVE" if session_state.active else "PAUSED",
+                session_detail,
+                "warning" if not session_state.active else "normal",
+            )
+        )
+
+        manual_state = self._manual_override.status()
+        override_detail = manual_state.reason or "no flag"
+        if manual_state.expires_at:
+            override_detail += f";expires={manual_state.expires_at.isoformat()}"
+        modules.append(
+            ModuleStatus(
+                "Manual override",
+                "HALTED" if manual_state.halted else "CLEAR",
+                override_detail,
+                "error" if manual_state.halted else "normal",
+            )
+        )
+
+        resource_snapshot = self._resource_monitor.snapshot()
+        resource_severity = "normal"
+        if (
+            resource_snapshot.cpu_percent >= self._resource_monitor.cpu_threshold
+            or resource_snapshot.memory_percent >= self._resource_monitor.memory_threshold
+            or (
+                resource_snapshot.gpu_memory_percent is not None
+                and resource_snapshot.gpu_memory_percent
+                >= self._resource_monitor.gpu_threshold
+            )
+        ):
+            resource_severity = "warning"
+        gpu_repr = (
+            f"{resource_snapshot.gpu_memory_percent:.1f}%"
+            if resource_snapshot.gpu_memory_percent is not None
+            else "n/a"
+        )
+        modules.append(
+            ModuleStatus(
+                "Resources",
+                "PRESSURE" if resource_severity == "warning" else "OK",
+                f"cpu={resource_snapshot.cpu_percent:.1f}% mem={resource_snapshot.memory_percent:.1f}% gpu={gpu_repr}",
+                resource_severity,
+            )
+        )
+
+        modules.append(
+            ModuleStatus(
+                "Feature pipeline",
+                "READY",
+                (
+                    f"levels={self._config.features.lob_levels};"
+                    f"window={self._config.features.rolling_window}"
+                ),
+            )
+        )
+
+        ml_device = self._ml_engine.device_mode.upper()
+        ml_severity = (
+            "warning"
+            if self._ml_engine.device_mode != "gpu"
+            or self._ml_engine.throttle_delay > 0
+            else "normal"
+        )
+        modules.append(
+            ModuleStatus(
+                "ML engine",
+                ml_device,
+                f"throttle={self._ml_engine.throttle_delay * 1000:.0f}ms",
+                ml_severity,
+            )
+        )
+
+        fallback_state = "ENABLED" if self._config.fallback.enabled else "DISABLED"
+        fallback_detail = f"quota_remaining={self._fallback.remaining_allowance()}"
+        fallback_last = self._fallback.last_rejection
+        if fallback_last:
+            fallback_detail += f";last={fallback_last}"
+        modules.append(
+            ModuleStatus(
+                "Fallback signals",
+                fallback_state,
+                fallback_detail,
+                "warning" if not self._config.fallback.enabled else "normal",
+            )
+        )
+
+        risk_snapshot = self._risk_engine.snapshot()
+        risk_state = "HALTED" if risk_snapshot.get("halt_trading") else "OK"
+        risk_severity = "error" if risk_snapshot.get("halt_trading") else "normal"
+        if risk_snapshot.get("daily_loss_triggered") and risk_severity != "error":
+            risk_severity = "warning"
+        risk_detail = (
+            f"realized={risk_snapshot.get('realized_pnl', 0.0):.2f};"
+            f"orders={risk_snapshot.get('order_count', 0)}"
+        )
+        cooldown = risk_snapshot.get("loss_cooldown_until")
+        if cooldown:
+            risk_detail += f";cooldown_until={cooldown}"
+        modules.append(
+            ModuleStatus("Risk engine", risk_state, risk_detail, risk_severity)
+        )
+
+        exec_severity = "warning" if self._execution_engine.paper else "normal"
+        exec_detail = "paper" if self._execution_engine.paper else "live"
+        modules.append(
+            ModuleStatus(
+                "Execution",
+                self._execution_engine.mode.upper(),
+                f"mode={exec_detail}",
+                exec_severity,
+            )
+        )
+
+        storage_detail = (
+            f"signals={self._config.dashboard.repository_path.name};"
+            f"history={self._config.storage.base_path}"
+        )
+        modules.append(ModuleStatus("Storage", "READY", storage_detail))
+
+        connectivity = self._connectivity.snapshot()
+        modules.append(
+            ModuleStatus(
+                "Connectivity",
+                connectivity.get("active_channel", "n/a"),
+                (
+                    f"failures={connectivity.get('failure_count', 0)};"
+                    f"success_streak={connectivity.get('success_streak', 0)}"
+                ),
+                "warning" if connectivity.get("failure_count", 0) else "normal",
+            )
+        )
+
+        heartbeat_info = self._heartbeat.diagnostics()
+        heartbeat_state = "ON" if heartbeat_info.get("enabled") else "OFF"
+        last = heartbeat_info.get("last_beat")
+        heartbeat_detail = (
+            f"last={last.isoformat()}" if isinstance(last, datetime) else "no data"
+        )
+        modules.append(
+            ModuleStatus(
+                "Heartbeat",
+                heartbeat_state,
+                heartbeat_detail,
+                "warning" if heartbeat_info.get("misses") else "normal",
+            )
+        )
+
+        errors: list[str] = []
+        if risk_snapshot.get("emergency_reason"):
+            errors.append(f"Emergency halt: {risk_snapshot['emergency_reason']}")
+        if risk_snapshot.get("calibration_required"):
+            expiry = risk_snapshot.get("calibration_expiry")
+            if expiry:
+                errors.append(f"Calibration required until {expiry}")
+            else:
+                errors.append("Calibration required")
+        if manual_state.halted:
+            reason = manual_state.reason or "manual override"
+            if manual_state.expires_at:
+                reason += f" until {manual_state.expires_at.isoformat()}"
+            errors.append(f"Manual override active: {reason}")
+        if self._latency_events:
+            alert = self._latency_events[-1]
+            errors.append(
+                (
+                    f"Latency alert {alert.stage}: {alert.latency_ms:.1f}ms > "
+                    f"{alert.threshold_ms:.1f}ms ({alert.severity})"
+                )
+            )
+        heartbeat_failure = heartbeat_info.get("last_failure_reason")
+        if heartbeat_failure:
+            errors.append(f"Heartbeat failures: {heartbeat_failure}")
+        if fallback_last:
+            errors.append(f"Fallback rejection: {fallback_last}")
+
+        processes: list[str] = []
+
+        def describe_task(task: Optional[asyncio.Task], label: str) -> None:
+            if task is None:
+                return
+            if task.cancelled():
+                state = "cancelled"
+            elif task.done():
+                exc = task.exception()
+                if exc:
+                    errors.append(f"{label} failed: {exc}")
+                    state = "error"
+                else:
+                    state = "finished"
+            else:
+                state = "running"
+            processes.append(f"{label}: {state}")
+
+        describe_task(self._checkpoint_task, "Checkpoint loop")
+        describe_task(self._heartbeat_task, "Heartbeat monitor")
+        describe_task(self._training_task, "Training scheduler")
+        for task in self._risk_tasks:
+            label = self._risk_task_labels.get(task, task.get_name() or "Risk task")
+            describe_task(task, label)
+
+        processes.append(
+            f"Disaster recovery: {'enabled' if self._config.disaster_recovery.enabled else 'disabled'}"
+        )
+        processes.append(
+            f"Performance reporter: {'enabled' if self._config.reporting.enabled else 'disabled'}"
+        )
+
+        return DashboardStatus(
+            modules=modules,
+            processes=processes,
+            errors=errors,
+            ensemble=self._ml_engine.ensemble_overview(),
+        )
 
     def _restore_from_checkpoint(self) -> None:
         state = self._checkpoint_manager.load()
@@ -385,31 +633,39 @@ class Orchestrator:
 
     def _start_risk_tasks(self) -> None:
         if self._risk_schedule.rotation_interval_seconds > 0:
-            self._risk_tasks.append(
-                asyncio.create_task(
-                    self._instrument_rotation_loop(self._risk_schedule.rotation_interval_seconds)
-                )
+            task = asyncio.create_task(
+                self._instrument_rotation_loop(
+                    self._risk_schedule.rotation_interval_seconds
+                ),
+                name="risk_rotation",
             )
+            self._risk_tasks.append(task)
+            self._risk_task_labels[task] = "Instrument rotation"
         if self._risk_schedule.position_check_interval_seconds > 0:
-            self._risk_tasks.append(
-                asyncio.create_task(
-                    self._position_management_loop(
-                        self._risk_schedule.position_check_interval_seconds
-                    )
-                )
+            task = asyncio.create_task(
+                self._position_management_loop(
+                    self._risk_schedule.position_check_interval_seconds
+                ),
+                name="risk_position_checks",
             )
+            self._risk_tasks.append(task)
+            self._risk_task_labels[task] = "Position management"
         if self._risk_schedule.hedging_interval_seconds > 0:
-            self._risk_tasks.append(
-                asyncio.create_task(
-                    self._hedging_loop(self._risk_schedule.hedging_interval_seconds)
-                )
+            task = asyncio.create_task(
+                self._hedging_loop(self._risk_schedule.hedging_interval_seconds),
+                name="risk_hedging",
             )
+            self._risk_tasks.append(task)
+            self._risk_task_labels[task] = "Hedging loop"
         if self._risk_schedule.drift_check_interval_seconds > 0:
-            self._risk_tasks.append(
-                asyncio.create_task(
-                    self._drift_review_loop(self._risk_schedule.drift_check_interval_seconds)
-                )
+            task = asyncio.create_task(
+                self._drift_review_loop(
+                    self._risk_schedule.drift_check_interval_seconds
+                ),
+                name="risk_drift_checks",
             )
+            self._risk_tasks.append(task)
+            self._risk_task_labels[task] = "Drift review"
 
     def _collect_risk_snapshots(self) -> dict[str, dict[str, float]]:
         snapshots: dict[str, dict[str, float]] = {}
@@ -913,6 +1169,7 @@ class Orchestrator:
                 task.cancel()
                 with suppress(asyncio.CancelledError):
                     await task
+                self._risk_task_labels.pop(task, None)
             await self._process_latency_alerts()
             await self._persist_checkpoint()
             await self._performance_reporter.maybe_emit()
@@ -929,33 +1186,32 @@ class Orchestrator:
             return
         if not self._config.dashboard.auto_start:
             return
-        host = self._config.dashboard.host
-        port = int(self._config.dashboard.port)
         try:
             thread = run_dashboard(
                 self._config.dashboard.repository_path,
-                host=host,
-                port=port,
+                status_provider=self.dashboard_status,
+                refresh_interval_ms=self._config.dashboard.refresh_interval_ms,
+                signal_limit=self._config.dashboard.signal_limit,
+                headless=self._config.dashboard.headless,
+                title=self._config.dashboard.title,
                 background=True,
             )
         except OSError as exc:
             LOGGER.error(
-                "Failed to launch dashboard UI on %s:%s: %s", host, port, exc
+                "Failed to launch dashboard UI: %s", exc
             )
             self._audit_logger.log(
                 "UI",
                 "DASHBOARD_ERROR",
-                f"host={host};port={port};error={exc}",
+                f"error={exc}",
             )
             return
         if thread is None:
             LOGGER.warning("Dashboard launcher returned no thread; UI not started")
             return
         self._dashboard_thread = thread
-        LOGGER.info("Dashboard UI started on http://%s:%s", host, port)
-        self._audit_logger.log(
-            "UI", "DASHBOARD_STARTED", f"host={host};port={port}"
-        )
+        LOGGER.info("Dashboard UI started with Tkinter renderer")
+        self._audit_logger.log("UI", "DASHBOARD_STARTED", "renderer=tkinter")
 
 
 def run_from_yaml(path: str | Path) -> None:

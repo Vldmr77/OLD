@@ -95,6 +95,19 @@ class MLEngine:
         self._pending_failover = None
         return message
 
+    def ensemble_overview(self) -> dict[str, object]:
+        """Return a serialisable snapshot of ensemble weights and runtime state."""
+
+        return {
+            "device_mode": self._device_mode,
+            "throttle_delay": self._throttle_delay,
+            "model_dir": str(self._model_dir),
+            "base_weights": dict(self._base_weights),
+            "class_weights": {
+                label: dict(weights) for label, weights in self._class_weights.items()
+            },
+        }
+
     def reload_models(self, model_dir: Path) -> None:
         """Reload quantised models from disk, recovering corrupted files if needed."""
 

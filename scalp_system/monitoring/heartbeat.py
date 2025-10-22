@@ -85,5 +85,18 @@ class HeartbeatMonitor:
 
         self._last_failure_reason = reason
 
+    def diagnostics(self) -> dict:
+        """Expose internal heartbeat counters for observability."""
+
+        return {
+            "enabled": self.enabled,
+            "interval_seconds": self.interval_seconds,
+            "miss_threshold": self.miss_threshold,
+            "last_beat": self._last_beat,
+            "misses": self._misses,
+            "last_context": self._last_context,
+            "last_failure_reason": self._last_failure_reason,
+        }
+
 
 __all__ = ["HeartbeatMonitor", "HeartbeatStatus"]

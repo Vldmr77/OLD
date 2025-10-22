@@ -16,12 +16,12 @@ def test_config_path_forwarded_to_system() -> None:
 
 
 def test_dashboard_invocation_without_separator() -> None:
-    module, forwarded = build_invocation(["--dashboard", "--host", "0.0.0.0"])
+    module, forwarded = build_invocation(["--dashboard", "--refresh-interval", "750"])
     assert module == "scalp_system.cli.dashboard"
-    assert forwarded == ["--host", "0.0.0.0"]
+    assert forwarded == ["--refresh-interval", "750"]
 
 
 def test_dashboard_invocation_with_separator() -> None:
-    module, forwarded = build_invocation(["--dashboard", "--", "--port", "6000"])
+    module, forwarded = build_invocation(["--dashboard", "--", "--signal-limit", "40"])
     assert module == "scalp_system.cli.dashboard"
-    assert forwarded == ["--port", "6000"]
+    assert forwarded == ["--signal-limit", "40"]

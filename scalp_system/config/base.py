@@ -234,6 +234,10 @@ class DashboardConfig:
     host: str = "127.0.0.1"
     port: int = 5000
     repository_path: Path = Path("./runtime/signals.db")
+    refresh_interval_ms: int = 1000
+    signal_limit: int = 25
+    title: str = "Scalp System Dashboard"
+    headless: bool = False
 
     def ensure(self, default_base: Path | None = None) -> None:
         self.auto_start = bool(self.auto_start)
@@ -249,6 +253,16 @@ class DashboardConfig:
         if default_base is not None and self.repository_path == Path("./runtime/signals.db"):
             self.repository_path = default_base / "signals.db"
         self.repository_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            self.refresh_interval_ms = max(250, int(self.refresh_interval_ms))
+        except (TypeError, ValueError):
+            self.refresh_interval_ms = 1000
+        try:
+            self.signal_limit = max(1, int(self.signal_limit))
+        except (TypeError, ValueError):
+            self.signal_limit = 25
+        self.title = str(self.title or "Scalp System Dashboard")
+        self.headless = bool(self.headless)
 
 
 @dataclass

@@ -160,6 +160,10 @@ dashboard:
   host: 127.0.0.1
   port: 5000
   repository_path: ./runtime/signals.db
+  refresh_interval_ms: 1000
+  signal_limit: 25
+  title: "Scalp System Control Room"
+  headless: false
 disaster_recovery:
   enabled: true
   replication_path: ./runtime/backups

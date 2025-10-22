@@ -5,31 +5,27 @@ import pytest
 from scalp_system.config.base import OrchestratorConfig
 from scalp_system.orchestrator import Orchestrator
 from scalp_system.storage.repository import SQLiteRepository
-from scalp_system.ui.dashboard import create_dashboard_app
+from scalp_system.ui.dashboard import DashboardStatus, DashboardUI, ModuleStatus
 
 
-def test_dashboard_routes(tmp_path):
+def test_dashboard_refresh_headless(tmp_path):
     repo_path = tmp_path / "signals.sqlite3"
     repository = SQLiteRepository(repo_path)
     repository.persist_signal("BBG000000001", 1, 0.87)
-    app = create_dashboard_app(repository)
-    client = app.test_client()
 
-    response = client.get("/api/summary")
-    assert response.status_code == 200
-    summary = response.json()
-    assert summary["total_signals"] == 1
-    assert summary["latest"]["figi"] == "BBG000000001"
+    status = DashboardStatus(
+        modules=[ModuleStatus("Data engine", "RUNNING", "detail")],
+        processes=["stream"],
+        errors=["none"],
+        ensemble={"base_weights": {"lstm_ob": 0.4}},
+    )
 
-    response = client.get("/api/signals")
-    assert response.status_code == 200
-    payload = response.json()
-    assert isinstance(payload, list)
-    assert payload[0]["figi"] == "BBG000000001"
+    ui = DashboardUI(repository, status_provider=lambda: status, headless=True)
+    snapshot = ui.refresh_once()
 
-    response = client.get("/")
-    assert response.status_code == 200
-    assert "Scalp System Dashboard" in response.get_data(as_text=True)
+    assert snapshot.summary["total_signals"] == 1
+    assert snapshot.status.modules[0].name == "Data engine"
+    assert snapshot.status.ensemble["base_weights"]["lstm_ob"] == pytest.approx(0.4)
 
 
 def _build_config(tmp_path: Path, auto_start: bool = True) -> OrchestratorConfig:
@@ -39,8 +35,11 @@ def _build_config(tmp_path: Path, auto_start: bool = True) -> OrchestratorConfig
             "storage": {"base_path": str(runtime_dir)},
             "dashboard": {
                 "auto_start": auto_start,
-                "host": "127.0.0.1",
-                "port": 8765,
+                "repository_path": str(runtime_dir / "signals.sqlite3"),
+                "refresh_interval_ms": 750,
+                "signal_limit": 15,
+                "title": "Test Dashboard",
+                "headless": True,
             },
             "reporting": {
                 "report_path": str(tmp_path / "reports" / "performance.jsonl")
@@ -65,13 +64,27 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
     config = _build_config(tmp_path, auto_start=True)
     calls: dict[str, object] = {}
 
-    def fake_run_dashboard(path: Path, *, host: str, port: int, background: bool):
-        calls.update({
-            "path": path,
-            "host": host,
-            "port": port,
-            "background": background,
-        })
+    def fake_run_dashboard(
+        path: Path,
+        *,
+        status_provider,
+        refresh_interval_ms: int,
+        signal_limit: int,
+        headless: bool,
+        title: str,
+        background: bool,
+    ):
+        calls.update(
+            {
+                "path": path,
+                "status_provider": status_provider,
+                "refresh_interval_ms": refresh_interval_ms,
+                "signal_limit": signal_limit,
+                "headless": headless,
+                "title": title,
+                "background": background,
+            }
+        )
 
         class DummyThread:
             pass
@@ -84,14 +97,18 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
     orchestrator._start_dashboard_if_needed()
 
     assert calls["path"] == config.dashboard.repository_path
-    assert calls["host"] == config.dashboard.host
-    assert calls["port"] == config.dashboard.port
+    assert calls["refresh_interval_ms"] == config.dashboard.refresh_interval_ms
+    assert calls["signal_limit"] == config.dashboard.signal_limit
+    assert calls["headless"] is True
+    assert calls["title"] == "Test Dashboard"
     assert calls["background"] is True
-    assert orchestrator._dashboard_thread is not None
+    provider = calls["status_provider"]
+    assert provider.__self__ is orchestrator  # bound method
 
 
 def test_orchestrator_skips_dashboard_when_disabled(monkeypatch, tmp_path):
     config = _build_config(tmp_path, auto_start=False)
+
     def unexpected(*args, **kwargs):  # pragma: no cover - failure helper
         pytest.fail("run_dashboard should not be invoked when auto_start is disabled")
 
@@ -101,3 +118,16 @@ def test_orchestrator_skips_dashboard_when_disabled(monkeypatch, tmp_path):
     orchestrator._start_dashboard_if_needed()
 
     assert orchestrator._dashboard_thread is None
+
+
+def test_dashboard_status_contains_modules(tmp_path):
+    config = _build_config(tmp_path)
+    orchestrator = Orchestrator(config)
+    status = orchestrator.dashboard_status()
+
+    names = {module.name for module in status.modules}
+    assert "Data engine" in names
+    assert "ML engine" in names
+    assert "Execution" in names
+    assert status.ensemble["base_weights"]
+    assert any(proc.startswith("Disaster recovery") for proc in status.processes)

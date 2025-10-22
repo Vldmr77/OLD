@@ -117,5 +117,13 @@ class ExecutionEngine:
         )
         await broker.place_order(limit_order)
 
+    @property
+    def mode(self) -> str:
+        return self._mode
+
+    @property
+    def paper(self) -> bool:
+        return self._paper
+
 
 __all__ = ["ExecutionEngine", "ExecutionReport"]
