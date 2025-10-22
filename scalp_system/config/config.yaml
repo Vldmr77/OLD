@@ -1,0 +1,247 @@
+system:
+  mode: forward-test
+  startup_time: "09:30"
+  checkpoint_interval_seconds: 300
+  latency_thresholds:
+    features: 12.0
+    ml: 20.0
+    risk: 8.0
+  latency_violation_limit: 3
+session:
+  enabled: true
+  start_time: "09:45"
+  end_time: "23:50"
+  pre_open_minutes: 10
+  post_close_minutes: 5
+  allowed_weekdays:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+environment: development
+logging:
+  level: DEBUG
+datafeed:
+  sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
+  use_sandbox: true
+  allow_tokenless: true
+  instruments:
+    - BBG004730ZJ9
+    - BBG004731032
+    - BBG004730N88
+    - FIGI0004
+    - FIGI0005
+    - FIGI0006
+    - FIGI0007
+    - FIGI0008
+    - FIGI0009
+    - FIGI0010
+    - FIGI0011
+    - FIGI0012
+    - FIGI0013
+    - FIGI0014
+    - FIGI0015
+  monitored_instruments:
+    - FIGI0016
+    - FIGI0017
+    - FIGI0018
+    - FIGI0019
+    - FIGI0020
+    - FIGI0021
+    - FIGI0022
+    - FIGI0023
+    - FIGI0024
+    - FIGI0025
+    - FIGI0026
+    - FIGI0027
+    - FIGI0028
+    - FIGI0029
+    - FIGI0030
+    - FIGI0031
+    - FIGI0032
+    - FIGI0033
+    - FIGI0034
+    - FIGI0035
+    - FIGI0036
+    - FIGI0037
+    - FIGI0038
+    - FIGI0039
+    - FIGI0040
+    - FIGI0041
+    - FIGI0042
+    - FIGI0043
+    - FIGI0044
+    - FIGI0045
+  max_active_instruments: 15
+  monitor_pool_size: 30
+  trade_history_size: 200
+  candle_history_size: 240
+  instrument_classes:
+    BBG004730ZJ9: equity
+    BBG004731032: equity
+    BBG004730N88: equity
+    FIGI0004: equity
+    FIGI0005: equity
+    FIGI0006: equity
+    FIGI0007: equity
+    FIGI0008: equity
+    FIGI0009: equity
+    FIGI0010: equity
+    FIGI0011: equity
+    FIGI0012: equity
+    FIGI0013: equity
+    FIGI0014: equity
+    FIGI0015: equity
+    FIGI0016: futures
+    FIGI0017: futures
+    FIGI0018: futures
+  depth: 10
+  current_cache_ttl: 60
+  current_cache_size: 50
+  history_length: 30
+  soft_rss_limit_mb: 400
+  hard_rss_limit_mb: 700
+  reconnect_delay: 1.0
+features:
+  lob_levels: 10
+  rolling_window: 20
+ml:
+  batch_size: 64
+  model_dir: ./runtime/models
+  weights:
+    lstm_ob: 0.35
+    gbdt_features: 0.25
+    transformer_temporal: 0.25
+    svm_volatility: 0.15
+  class_weights:
+    equity:
+      lstm_ob: 0.35
+      gbdt_features: 0.25
+      transformer_temporal: 0.25
+      svm_volatility: 0.15
+    futures:
+      lstm_ob: 0.3
+      gbdt_features: 0.3
+      transformer_temporal: 0.25
+      svm_volatility: 0.15
+risk:
+  max_position: 50
+  max_daily_loss: 10000.0
+  max_order_rate_per_minute: 120
+  max_gross_exposure: 500000.0
+  max_consecutive_losses: 3
+  loss_cooldown_minutes: 15
+  capital_base: 500000.0
+  max_risk_per_instrument: 0.05
+  daily_loss_limit_pct: 0.02
+  max_exposure_pct: 0.5
+  vix_threshold: 0.4
+risk_schedule:
+  rotation_interval_seconds: 60
+  position_check_interval_seconds: 10
+  drift_check_interval_seconds: 1800
+  hedging_interval_seconds: 300
+execution:
+  account_id: ""
+storage:
+  base_path: ./runtime
+  signals_db: ./runtime/signals.db
+  health_db: ./runtime/health_check.db
+  orderbooks_path: ./runtime/orderbooks.db
+  trades_path: ./runtime/trades
+  candles_path: ./runtime/candles
+  features_path: ./runtime/features
+  parquet_compression: snappy
+  enable_zstd: true
+  cache_flush_min_seconds: 1.0
+  cache_flush_max_seconds: 5.0
+  cache_target_buffer: 50
+bus:
+  enabled: true
+  host: 127.0.0.1
+  port: 8787
+dashboard:
+  auto_start: true
+  host: 127.0.0.1
+  port: 5000
+  repository_path: ./runtime/signals.db
+  refresh_interval_ms: 1000
+  signal_limit: 25
+  title: "Scalp System Control Room"
+  headless: false
+disaster_recovery:
+  enabled: true
+  replication_path: ./runtime/backups
+  include_patterns:
+    - "*.db"
+    - "*.json"
+    - "*.jsonl"
+  interval_minutes: 30
+  max_snapshots: 12
+monitoring:
+  cpu_soft_limit: 90.0
+  memory_soft_limit: 85.0
+  gpu_soft_limit: 90.0
+  audit_log_filename: audit.log
+  heartbeat_enabled: true
+  heartbeat_interval_seconds: 5.0
+  heartbeat_miss_threshold: 3
+security:
+  encryption_key_path: ./runtime/secret.key
+notifications:
+  telegram_bot_token: ""
+  telegram_chat_id: ""
+  enable_sound_alerts: false
+  liquidity_spread_threshold_bps: 5.0
+  cooldown_seconds: 30
+fallback:
+  enabled: true
+  max_signals_per_hour: 10
+  imbalance_threshold: 0.7
+  volatility_threshold: 0.01
+  confidence: 0.7
+connectivity:
+  primary_label: fiber
+  backup_label: lte
+  failure_threshold: 1
+  recovery_message_count: 2
+  failover_latency_ms: 150
+manual_override:
+  enabled: false
+  flag_path: ./runtime/manual_override.flag
+  poll_interval_seconds: 1.0
+  auto_resume_minutes: null
+reporting:
+  enabled: true
+  interval_minutes: 60
+  max_history_days: 14
+  report_path: ./runtime/reports/performance.jsonl
+training:
+  dataset_path: ./data/training.jsonl
+  output_dir: ./models
+  epochs: 5
+  learning_rate: 0.01
+  validation_split: 0.2
+  min_samples: 10
+  enable_quantization: true
+  quantization_int8_threshold: 0.5
+training_schedule:
+  enabled: true
+  daily_time: "18:45"
+  weekdays:
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
+  require_forward_window: true
+backtest:
+  dataset_path: ./data/backtest.jsonl
+  initial_capital: 250000.0
+  transaction_cost_bps: 0.8
+  slippage_bps: 0.5
+  max_orders: 500
+brokers:
+  tinkoff:
+    tokens_file: ./runtime/tinkoff_tokens.json
