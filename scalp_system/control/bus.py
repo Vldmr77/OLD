@@ -6,9 +6,10 @@ import json
 import logging
 import socket
 import threading
+import time
 from dataclasses import dataclass
 from socketserver import StreamRequestHandler, ThreadingTCPServer
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Type
 
 LOGGER = logging.getLogger(__name__)
 
@@ -75,18 +76,7 @@ class EventBus:
         class _Server(ThreadingTCPServer):
             allow_reuse_address = True
 
-        try:
-            server = _Server((self._host, self._port), _RequestHandler)
-        except OSError as exc:
-            if self._port and exc.errno in {errno.EADDRINUSE, errno.EACCES}:
-                LOGGER.warning(
-                    "Event bus port %s unavailable (%s); retrying on an ephemeral port.",
-                    self._port,
-                    exc,
-                )
-                server = _Server((self._host, 0), _RequestHandler)
-            else:
-                raise
+        server = self._create_server_with_retry(_Server, _RequestHandler)
         self._server = server
         self._port = int(server.server_address[1])
 
@@ -94,6 +84,49 @@ class EventBus:
         thread.start()
         self._thread = thread
         LOGGER.info("Event bus listening on %s:%s", *server.server_address)
+
+    def _create_server_with_retry(
+        self,
+        server_cls: Type[ThreadingTCPServer],
+        handler_cls: Type[StreamRequestHandler],
+    ) -> ThreadingTCPServer:
+        if not self._port:
+            return server_cls((self._host, self._port), handler_cls)
+
+        attempts = 0
+        delay = 0.05
+        while attempts < 8:
+            try:
+                return server_cls((self._host, self._port), handler_cls)
+            except OSError as exc:
+                if exc.errno not in {errno.EADDRINUSE, errno.EACCES}:
+                    raise
+                if self._port_in_use():
+                    LOGGER.error(
+                        "Event bus port %s is already in use by another process.", self._port
+                    )
+                    raise
+                attempts += 1
+                LOGGER.warning(
+                    "Event bus port %s unavailable (%s); retrying in %.2fs", self._port, exc, delay
+                )
+                time.sleep(delay)
+                delay = min(delay * 1.5, 0.5)
+
+        LOGGER.warning(
+            "Event bus port %s still unavailable after retries; falling back to an ephemeral port.",
+            self._port,
+        )
+        return server_cls((self._host, 0), handler_cls)
+
+    def _port_in_use(self) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.1)
+            try:
+                probe.connect((self._host, self._port))
+            except OSError:
+                return False
+        return True
 
     def stop(self) -> None:
         server = self._server

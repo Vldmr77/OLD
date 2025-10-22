@@ -5,9 +5,11 @@ from __future__ import annotations
 import errno
 import json
 import logging
+import socket
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Callable, Optional
+from typing import Callable, Optional, Type
 
 LOGGER = logging.getLogger(__name__)
 
@@ -89,24 +91,61 @@ class DashboardStatusServer:
         class _Server(ThreadingHTTPServer):
             allow_reuse_address = True
 
-        try:
-            server = _Server((self._host, self._port), _Handler)
-        except OSError as exc:
-            if self._port and exc.errno in {errno.EADDRINUSE, errno.EACCES}:
-                LOGGER.warning(
-                    "Dashboard status port %s unavailable (%s); retrying on an ephemeral port.",
-                    self._port,
-                    exc,
-                )
-                server = _Server((self._host, 0), _Handler)
-            else:
-                raise
+        server = self._create_server_with_retry(_Server, _Handler)
         self._server = server
         self._port = int(server.server_address[1])
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self._thread = thread
         LOGGER.info("Dashboard status server listening on %s:%s", *server.server_address)
+
+    def _create_server_with_retry(
+        self,
+        server_cls: Type[ThreadingHTTPServer],
+        handler_cls: Type[BaseHTTPRequestHandler],
+    ) -> ThreadingHTTPServer:
+        if not self._port:
+            return server_cls((self._host, self._port), handler_cls)
+
+        attempts = 0
+        delay = 0.05
+
+        while attempts < 8:
+            try:
+                return server_cls((self._host, self._port), handler_cls)
+            except OSError as exc:
+                if exc.errno not in {errno.EADDRINUSE, errno.EACCES}:
+                    raise
+                if self._port_in_use():
+                    LOGGER.error(
+                        "Dashboard status port %s is already in use by another process.",
+                        self._port,
+                    )
+                    raise
+                attempts += 1
+                LOGGER.warning(
+                    "Dashboard status port %s unavailable (%s); retrying in %.2fs",
+                    self._port,
+                    exc,
+                    delay,
+                )
+                time.sleep(delay)
+                delay = min(delay * 1.5, 0.5)
+
+        LOGGER.warning(
+            "Dashboard status port %s still unavailable after retries; falling back to an ephemeral port.",
+            self._port,
+        )
+        return server_cls((self._host, 0), handler_cls)
+
+    def _port_in_use(self) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.settimeout(0.1)
+            try:
+                probe.connect((self._host, self._port))
+            except OSError:
+                return False
+        return True
 
     # ------------------------------------------------------------------
     def stop(self) -> None:
