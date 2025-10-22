@@ -268,6 +268,8 @@ def _write_tokens_file(
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def _build_key_manager(security_section: Any, *, config_path: Path) -> Optional[KeyManager]:

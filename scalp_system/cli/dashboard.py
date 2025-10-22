@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ..config import loader as config_loader
 from ..config.loader import load_config
+from ..config.token_prompt import store_tokens, token_status
 from ..control.bus import BusClient
 from ..ui import run_dashboard
 
@@ -67,6 +68,20 @@ def main(argv: list[str] | None = None) -> None:
                 cfg.bus.port,
             )
 
+    def _token_writer(sandbox: str | None, production: str | None) -> bool:
+        try:
+            return store_tokens(config_path, sandbox=sandbox, production=production)
+        except RuntimeError as exc:
+            LOGGER.error("Token persistence failed: %s", exc)
+            return False
+
+    def _token_status() -> dict[str, bool]:
+        try:
+            return token_status(config_path)
+        except RuntimeError as exc:
+            LOGGER.error("Token status lookup failed: %s", exc)
+            return {"sandbox": False, "production": False}
+
     run_dashboard(
         args.repository,
         refresh_interval_ms=args.refresh_interval,
@@ -74,6 +89,8 @@ def main(argv: list[str] | None = None) -> None:
         title=args.title,
         headless=args.headless,
         config_path=config_path,
+        token_writer=_token_writer,
+        token_status_provider=_token_status,
         bus_address=(cfg.bus.host, cfg.bus.port)
         if bus_client is not None
         else None,

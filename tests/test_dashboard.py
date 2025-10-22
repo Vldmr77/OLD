@@ -85,6 +85,8 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
         background: bool,
         config_path=None,
         restart_callback=None,
+        token_writer=None,
+        token_status_provider=None,
         instrument_replace_callback=None,
         sandbox_forward_callback=None,
         backtest_callback=None,
@@ -105,6 +107,8 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
                 "background": background,
                 "config_path": config_path,
                 "restart_callback": restart_callback,
+                "token_writer": token_writer,
+                "token_status_provider": token_status_provider,
                 "instrument_replace_callback": instrument_replace_callback,
                 "sandbox_forward_callback": sandbox_forward_callback,
                 "backtest_callback": backtest_callback,
@@ -133,6 +137,8 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
     assert calls["background"] is True
     assert calls["config_path"] is None
     assert callable(calls["restart_callback"])
+    assert callable(calls["token_writer"])
+    assert callable(calls["token_status_provider"])
     provider = calls["status_provider"]
     assert provider.__self__ is orchestrator
     assert calls["bus_address"] is None
@@ -203,3 +209,5 @@ def test_cli_dashboard_omits_bus_when_unavailable(monkeypatch, tmp_path):
     dashboard_cli.main(["--repository", str(tmp_path / "signals.db"), "--config", "dummy.yaml"])
 
     assert captured["bus_address"] is None
+    assert callable(captured["token_writer"])
+    assert callable(captured["token_status_provider"])

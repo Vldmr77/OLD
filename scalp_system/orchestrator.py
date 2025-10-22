@@ -10,7 +10,7 @@ from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from threading import Lock, Thread
-from typing import Callable, Deque, Optional
+from typing import Callable, Deque, Dict, Optional
 
 from .broker.tinkoff import (
     TinkoffAPI,
@@ -49,7 +49,7 @@ from .storage.historical import HistoricalDataStorage
 from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
-from .config.token_prompt import is_placeholder_token
+from .config.token_prompt import is_placeholder_token, store_tokens, token_status
 from .simulation.backtest import BacktestEngine
 from .ui import run_dashboard
 
@@ -188,6 +188,35 @@ class Orchestrator:
         self._operation_lock = Lock()
         self._active_backtests = 0
         self._active_manual_training = 0
+
+    def _dashboard_token_status(self) -> Dict[str, bool]:
+        if not self._config_path:
+            return {"sandbox": False, "production": False}
+        try:
+            return token_status(self._config_path)
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.exception("Failed to read broker token status")
+            return {"sandbox": False, "production": False}
+
+    def _dashboard_store_tokens(self, sandbox: Optional[str], production: Optional[str]) -> bool:
+        if not self._config_path:
+            LOGGER.warning("Cannot persist tokens without a configuration path")
+            return False
+        try:
+            updated = store_tokens(
+                self._config_path,
+                sandbox=sandbox,
+                production=production,
+            )
+        except RuntimeError as exc:
+            LOGGER.error("Token persistence failed: %s", exc)
+            return False
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.exception("Unexpected error while persisting tokens")
+            return False
+        if updated:
+            self._audit_logger.log("CONTROL", "TOKENS_UPDATED", "source=dashboard")
+        return updated
 
     def _resolve_api_token(self) -> Optional[str]:
         token = (
@@ -1609,6 +1638,8 @@ class Orchestrator:
                 background=True,
                 config_path=self._config_path,
                 restart_callback=self.request_restart,
+                token_writer=self._dashboard_store_tokens,
+                token_status_provider=self._dashboard_token_status,
                 instrument_replace_callback=self.replace_instrument,
                 sandbox_forward_callback=self.start_sandbox_forward,
                 backtest_callback=self.trigger_backtest,
