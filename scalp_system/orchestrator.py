@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import subprocess
+import sys
 from collections import deque
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from contextlib import suppress
@@ -185,6 +187,7 @@ class Orchestrator:
         self._risk_tasks: list[asyncio.Task] = []
         self._risk_task_labels: dict[asyncio.Task, str] = {}
         self._dashboard_thread: Optional[Thread] = None
+        self._dashboard_process: Optional[subprocess.Popen[str]] = None
         self._operation_lock = Lock()
         self._active_backtests = 0
         self._active_manual_training = 0
@@ -1724,6 +1727,7 @@ class Orchestrator:
             await self._process_latency_alerts()
             await self._persist_checkpoint()
             await self._performance_reporter.maybe_emit()
+            self._stop_dashboard()
             self._stop_event_bus()
         if self._restart_event and self._restart_event.is_set():
             raise RestartRequested()
@@ -1866,10 +1870,61 @@ class Orchestrator:
             self._audit_logger.log("CONTROL", "BUS_STOPPED", "ok=true")
             self._event_bus = None
 
+    def _cleanup_dashboard_handles(self) -> None:
+        if self._dashboard_thread is not None and not self._dashboard_thread.is_alive():
+            self._dashboard_thread = None
+        if self._dashboard_process is not None and self._dashboard_process.poll() is not None:
+            self._dashboard_process = None
+
+    def _stop_dashboard(self) -> None:
+        if self._dashboard_process is not None:
+            try:
+                self._dashboard_process.terminate()
+                try:
+                    self._dashboard_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:  # pragma: no cover - defensive
+                    self._dashboard_process.kill()
+            finally:
+                self._dashboard_process = None
+
     def _start_dashboard_if_needed(self) -> None:
-        if self._dashboard_thread is not None:
+        self._cleanup_dashboard_handles()
+        if self._dashboard_process is not None or self._dashboard_thread is not None:
             return
         if not self._config.dashboard.auto_start:
+            return
+        if not self._config.dashboard.headless:
+            python_exe = sys.executable or "python"
+            repo_path = Path(self._config.dashboard.repository_path)
+            base_dir = Path.cwd()
+            if self._config_path:
+                base_dir = Path(self._config_path).expanduser().resolve().parent
+            if not repo_path.is_absolute():
+                repo_path = (base_dir / repo_path).resolve()
+            args = [
+                python_exe,
+                "-m",
+                "scalp_system.cli.dashboard",
+                "--repository",
+                str(repo_path),
+                "--refresh-interval",
+                str(self._config.dashboard.refresh_interval_ms),
+                "--signal-limit",
+                str(self._config.dashboard.signal_limit),
+                "--title",
+                self._config.dashboard.title,
+            ]
+            if self._config_path:
+                args.extend(["--config", str(Path(self._config_path).expanduser().resolve())])
+            try:
+                process = subprocess.Popen(args)
+            except OSError as exc:
+                LOGGER.error("Failed to launch dashboard process: %s", exc)
+                self._audit_logger.log("UI", "DASHBOARD_ERROR", f"error={exc}")
+                return
+            self._dashboard_process = process
+            LOGGER.info("Dashboard UI started in external process pid=%s", process.pid)
+            self._audit_logger.log("UI", "DASHBOARD_STARTED", "renderer=tkinter;mode=process")
             return
         try:
             bus_address = None

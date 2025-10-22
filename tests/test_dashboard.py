@@ -1,4 +1,5 @@
 import socket
+import sys
 from pathlib import Path
 
 import pytest
@@ -186,6 +187,45 @@ def test_orchestrator_provides_bus_address_when_bus_running(monkeypatch, tmp_pat
     finally:
         orchestrator._stop_event_bus()
 
+
+def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
+    config = _build_config(tmp_path, auto_start=True)
+    config.dashboard.headless = False
+    config.dashboard.title = "Proc UI"
+    config.dashboard.repository_path = tmp_path / "runtime" / "signals.db"
+
+    captured: dict[str, object] = {}
+
+    class DummyProcess:
+        def __init__(self, args: list[str]):
+            self.args = args
+            self._terminated = False
+            self.pid = 1234
+
+        def poll(self) -> int | None:
+            return 0 if self._terminated else None
+
+        def terminate(self) -> None:
+            self._terminated = True
+
+        def wait(self, timeout: float | None = None) -> int:
+            self._terminated = True
+            return 0
+
+    def fake_popen(args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return DummyProcess(args)
+
+    monkeypatch.setattr("scalp_system.orchestrator.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("scalp_system.orchestrator.sys.executable", sys.executable)
+
+    orchestrator = Orchestrator(config, config_path=tmp_path / "config.yaml")
+    orchestrator._start_dashboard_if_needed()
+
+    assert captured["args"][0] == sys.executable
+    assert "scalp_system.cli.dashboard" in captured["args"]
+    assert "--repository" in captured["args"]
 
 def test_cli_dashboard_omits_bus_when_unavailable(monkeypatch, tmp_path):
     config = _build_config(tmp_path)
