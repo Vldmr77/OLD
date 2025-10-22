@@ -40,7 +40,7 @@ class OverviewScreen:
         context.notebook.add(self._frame, text=context.strings["tab_overview"])
         self._state: State = context.state
         self._graph = StatusGraph(self._frame)
-        self._graph.grid(row=0, column=0, columnspan=3, padx=8, pady=8, sticky="nsew")
+        self._graph.pack(fill="x", padx=8, pady=8)
 
         modules_frame = create_section(self._frame, RU["module_header"])
         self._module_table = SimpleTable(modules_frame, ["module", "state", "detail"], height=6)
@@ -67,7 +67,7 @@ class OverviewScreen:
         self._metrics.pack(anchor="w", padx=8, pady=4)
 
         actions = ttk.Frame(self._frame)
-        actions.grid(row=1, column=0, columnspan=3, sticky="ew", padx=8)
+        actions.pack(fill="x", padx=8, pady=4)
         self._buttons: list[tuple[object, bool]] = []
         for text_key, command, requires_bus in [
             ("btn_restart", "system.restart", True),
@@ -83,9 +83,6 @@ class OverviewScreen:
             )
             btn.pack(side="left", padx=4, pady=4)
             self._buttons.append((btn, requires_bus))
-        self._frame.columnconfigure(0, weight=1)
-        self._frame.columnconfigure(1, weight=1)
-        self._frame.columnconfigure(2, weight=1)
 
     def update(self) -> None:
         if ttk is None:

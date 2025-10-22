@@ -7,11 +7,16 @@ except Exception:  # pragma: no cover
     ttk = None  # type: ignore
 
 
-def create_section(parent, title: str):
+def create_section(parent, title: str, *, pack: bool = True, **pack_kwargs):
     if ttk is None:
         return None
     frame = ttk.LabelFrame(parent, text=title)
-    frame.pack(fill="both", expand=True, padx=8, pady=6)
+    if pack:
+        options = {"fill": "both", "expand": True, "padx": 8, "pady": 6}
+        options.update(pack_kwargs)
+        frame.pack(**options)
+    elif pack_kwargs:
+        frame.pack(**pack_kwargs)
     return frame
 
 
