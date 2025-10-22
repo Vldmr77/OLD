@@ -30,7 +30,7 @@
 ```bash
 python scripts/install_vendor.py  # устанавливает минимальные зависимости в scalp_system/vendor
 python scripts/apply_tinkoff_tokens.py --sandbox-token <TOKEN> --production-token <TOKEN>
-python -m scalp_system  # использует пакетный config.example.yaml по умолчанию
+python -m scalp_system  # сначала ищет config.yaml в текущей папке, затем пакетный пример
 ```
 
 Если запуск происходит из IDE или требуется «ярлык», используйте скрипт
@@ -52,8 +52,9 @@ python launch_scalp_system.py --dashboard -- --refresh-interval 750 --headless
 ```
 
 При отсутствии поддержки YAML можно использовать JSON-конфигурацию (`config.json`).
-Конфигурация по умолчанию лежит в `scalp_system/config/config.example.yaml` и
-используется всеми CLI инструментами, если не указать иной путь.
+Если рядом с точкой запуска есть `config.yaml` / `config.yml` / `config.json`,
+загрузчик автоматически возьмёт его. В противном случае используется пакетный
+`scalp_system/config/config.example.yaml`.
 
 Скрипт `apply_tinkoff_tokens.py` может зашифровать токены, если передать ключ Fernet через
 `--key path/to/key`. Значения также можно задавать переменными окружения
@@ -125,7 +126,7 @@ forward переключает конфигурацию в песочницу и
 
 ```bash
 python -m scalp_system.cli.dashboard \
-  --repository ./runtime/signals.sqlite3 \
+  --repository ./runtime/signals.db \
   --refresh-interval 1000 \
   --signal-limit 30
 ```

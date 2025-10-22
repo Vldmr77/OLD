@@ -10,7 +10,7 @@ from scalp_system.ui.dashboard import DashboardStatus, DashboardUI, ModuleStatus
 
 
 def test_dashboard_refresh_headless(tmp_path):
-    repo_path = tmp_path / "signals.sqlite3"
+    repo_path = tmp_path / "signals.db"
     repository = SQLiteRepository(repo_path)
     repository.persist_signal("BBG000000001", 1, 0.87)
 
@@ -37,7 +37,7 @@ def _build_config(tmp_path: Path, auto_start: bool = True) -> OrchestratorConfig
             "storage": {"base_path": str(runtime_dir)},
             "dashboard": {
                 "auto_start": auto_start,
-                "repository_path": str(runtime_dir / "signals.sqlite3"),
+                "repository_path": str(runtime_dir / "signals.db"),
                 "refresh_interval_ms": 750,
                 "signal_limit": 15,
                 "title": "Test Dashboard",

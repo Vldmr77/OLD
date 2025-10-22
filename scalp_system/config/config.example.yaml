@@ -1,6 +1,6 @@
 system:
   mode: forward-test
-  startup_time: 09:30
+  startup_time: "09:30"
   checkpoint_interval_seconds: 300
   latency_thresholds:
     features: 12.0
@@ -9,70 +9,70 @@ system:
   latency_violation_limit: 3
 session:
   enabled: true
-  start_time: 09:45
-  end_time: '23:50'
+  start_time: "09:45"
+  end_time: "23:50"
   pre_open_minutes: 10
   post_close_minutes: 5
   allowed_weekdays:
-  - 0
-  - 1
-  - 2
-  - 3
-  - 4
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
 environment: development
 logging:
   level: INFO
 datafeed:
-  sandbox_token: t.FVti568rNsdMJIuNMApjAMfCNJy8mfZaOgJmb03gpcO1ahFDM-_ttXCX4dfHYmketl9JsmDahGQ7mzSfrrhb6Q
+  sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
   use_sandbox: true
   allow_tokenless: true
   instruments:
-  - BBG004730ZJ9
-  - BBG004731032
-  - BBG004730N88
-  - FIGI0004
-  - FIGI0005
-  - FIGI0006
-  - FIGI0007
-  - FIGI0008
-  - FIGI0009
-  - FIGI0010
-  - FIGI0011
-  - FIGI0012
-  - FIGI0013
-  - FIGI0014
-  - FIGI0015
+    - BBG004730ZJ9
+    - BBG004731032
+    - BBG004730N88
+    - FIGI0004
+    - FIGI0005
+    - FIGI0006
+    - FIGI0007
+    - FIGI0008
+    - FIGI0009
+    - FIGI0010
+    - FIGI0011
+    - FIGI0012
+    - FIGI0013
+    - FIGI0014
+    - FIGI0015
   monitored_instruments:
-  - FIGI0016
-  - FIGI0017
-  - FIGI0018
-  - FIGI0019
-  - FIGI0020
-  - FIGI0021
-  - FIGI0022
-  - FIGI0023
-  - FIGI0024
-  - FIGI0025
-  - FIGI0026
-  - FIGI0027
-  - FIGI0028
-  - FIGI0029
-  - FIGI0030
-  - FIGI0031
-  - FIGI0032
-  - FIGI0033
-  - FIGI0034
-  - FIGI0035
-  - FIGI0036
-  - FIGI0037
-  - FIGI0038
-  - FIGI0039
-  - FIGI0040
-  - FIGI0041
-  - FIGI0042
-  - FIGI0043
-  - FIGI0044
-  - FIGI0045
+    - FIGI0016
+    - FIGI0017
+    - FIGI0018
+    - FIGI0019
+    - FIGI0020
+    - FIGI0021
+    - FIGI0022
+    - FIGI0023
+    - FIGI0024
+    - FIGI0025
+    - FIGI0026
+    - FIGI0027
+    - FIGI0028
+    - FIGI0029
+    - FIGI0030
+    - FIGI0031
+    - FIGI0032
+    - FIGI0033
+    - FIGI0034
+    - FIGI0035
+    - FIGI0036
+    - FIGI0037
+    - FIGI0038
+    - FIGI0039
+    - FIGI0040
+    - FIGI0041
+    - FIGI0042
+    - FIGI0043
+    - FIGI0044
+    - FIGI0045
   max_active_instruments: 15
   monitor_pool_size: 30
   trade_history_size: 200
@@ -103,7 +103,6 @@ datafeed:
   soft_rss_limit_mb: 400
   hard_rss_limit_mb: 700
   reconnect_delay: 1.0
-  production_token: t.baeBGxS1nYnaHLZ7tC328DzwPNpTQwDq70GZ8YSp3Q1Ek0N4g2Htzv3hBzbQIrsdcu70xICbCgDIq_19SWEppA
 features:
   lob_levels: 10
   rolling_window: 20
@@ -144,7 +143,7 @@ risk_schedule:
   drift_check_interval_seconds: 1800
   hedging_interval_seconds: 300
 execution:
-  account_id: ''
+  account_id: ""
 storage:
   base_path: ./runtime
   orderbooks_path: ./runtime/orderbooks.db
@@ -163,15 +162,15 @@ dashboard:
   repository_path: ./runtime/signals.db
   refresh_interval_ms: 1000
   signal_limit: 25
-  title: Scalp System Control Room
+  title: "Scalp System Control Room"
   headless: false
 disaster_recovery:
   enabled: true
   replication_path: ./runtime/backups
   include_patterns:
-  - '*.db'
-  - '*.json'
-  - '*.jsonl'
+    - "*.db"
+    - "*.json"
+    - "*.jsonl"
   interval_minutes: 30
   max_snapshots: 12
 monitoring:
@@ -185,8 +184,8 @@ monitoring:
 security:
   encryption_key_path: ./runtime/secret.key
 notifications:
-  telegram_bot_token: ''
-  telegram_chat_id: ''
+  telegram_bot_token: ""
+  telegram_chat_id: ""
   enable_sound_alerts: false
   liquidity_spread_threshold_bps: 5.0
   cooldown_seconds: 30
@@ -223,13 +222,13 @@ training:
   quantization_int8_threshold: 0.5
 training_schedule:
   enabled: true
-  daily_time: '18:45'
+  daily_time: "18:45"
   weekdays:
-  - 0
-  - 1
-  - 2
-  - 3
-  - 4
+    - 0
+    - 1
+    - 2
+    - 3
+    - 4
   require_forward_window: true
 backtest:
   dataset_path: ./data/backtest.jsonl

@@ -12,7 +12,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--repository",
         type=Path,
-        default=Path("./runtime/signals.sqlite3"),
+        default=Path("./runtime/signals.db"),
         help="Path to the SQLite repository file",
     )
     parser.add_argument(
