@@ -24,7 +24,7 @@ logging:
   level: DEBUG
 datafeed:
   sandbox_token: t.FVti568rNsdMJIuNMApjAMfCNJy8mfZaOgJmb03gpcO1ahFDM-_ttXCX4dfHYmketl9JsmDahGQ7mzSfrrhb6Q
-  use_sandbox: true
+  use_sandbox: false
   allow_tokenless: true
   instruments:
   - BBG004730N88
