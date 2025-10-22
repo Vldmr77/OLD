@@ -18,6 +18,14 @@ except ModuleNotFoundError:  # running as `python scalp_system/__main__.py`
     from scalp_system.config import DEFAULT_CONFIG_PATH
     from scalp_system.config.token_prompt import ensure_tokens_present
     from scalp_system.orchestrator import run_from_yaml
+except RuntimeError as exc:  # pragma: no cover - PyYAML missing or similar
+    from scalp_system.config import DEFAULT_CONFIG_PATH
+    from scalp_system.orchestrator import run_from_yaml
+
+    def ensure_tokens_present(config_path: Path | None):  # type: ignore[override]
+        resolved = (config_path or DEFAULT_CONFIG_PATH).expanduser()
+        print(f"[warn] Token setup skipped: {exc}")
+        return resolved
 
 
 def main(argv: Sequence[str] | None = None) -> None:
