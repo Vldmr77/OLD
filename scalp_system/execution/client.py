@@ -65,5 +65,27 @@ class BrokerClient:
             account_id=order.account_id or self._account_id,
         )
 
+    async def cancel_all_orders(self) -> int:
+        if not self._client:
+            raise RuntimeError("BrokerClient is not connected")
+        LOGGER.info("Cancelling all outstanding orders")
+        await self._limiter.acquire()
+        orders_api = getattr(self._client, "orders", None)
+        if orders_api is None:
+            raise RuntimeError("Orders API unavailable on client")
+        cancel = getattr(orders_api, "post_cancel_all_orders", None)
+        if cancel is None:
+            cancel = getattr(orders_api, "cancel_all_orders", None)
+        if cancel is None:
+            raise RuntimeError("Cancel-all endpoint is not available in the SDK")
+        response = await cancel(account_id=self._account_id)
+        count = getattr(response, "orders_cancelled", None)
+        if count is None:
+            count = getattr(response, "cancelled_orders_count", None)
+        try:
+            return int(count or 0)
+        except (TypeError, ValueError):
+            return 0
+
 
 __all__ = ["BrokerClient", "OrderRequest"]

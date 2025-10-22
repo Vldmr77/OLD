@@ -240,6 +240,17 @@ class RiskEngine:
         self._halt_trading = True
         self._emergency_reason = reason
 
+    def reset_halts(self, *, reset_daily_limit: bool = True) -> None:
+        """Clear manual halts so trading can resume when safe."""
+
+        self._halt_trading = False
+        self._halt_due_to_drift = False
+        self._emergency_reason = None
+        self._loss_cooldown_until = None
+        if reset_daily_limit:
+            self._daily_loss_triggered = False
+            self._consecutive_losses = 0
+
     def _reset_if_new_day(self) -> None:
         now = datetime.utcnow()
         if now.date() != self._session_start.date():

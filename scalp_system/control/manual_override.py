@@ -48,6 +48,15 @@ class ManualOverrideGuard:
         with suppress(FileNotFoundError):
             self._flag_path.unlink()
 
+    def activate(self, reason: Optional[str] = None) -> None:
+        """Create or update the manual override flag file."""
+
+        if not self._config.enabled:
+            return
+        message = (reason or "manual override").strip() or "manual override"
+        self._flag_path.parent.mkdir(parents=True, exist_ok=True)
+        self._flag_path.write_text(message, encoding="utf-8")
+
     def _read_reason(self) -> Optional[str]:
         try:
             content = self._flag_path.read_text(encoding="utf-8").strip()

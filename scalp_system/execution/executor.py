@@ -68,6 +68,17 @@ class ExecutionEngine:
                 LOGGER.exception("Order placement failed: %s", exc)
                 return ExecutionReport(figi=signal.figi, accepted=False, reason=str(exc))
 
+    async def cancel_all_orders(self) -> int:
+        if self._paper:
+            LOGGER.info("Paper mode active; no broker orders to cancel")
+            return 0
+        async with self._broker_factory() as broker:
+            try:
+                return await broker.cancel_all_orders()
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.exception("Failed to cancel orders: %s", exc)
+                return 0
+
     async def _execute_ioc(
         self,
         broker: BrokerClient,
@@ -124,6 +135,9 @@ class ExecutionEngine:
     @property
     def paper(self) -> bool:
         return self._paper
+
+    def set_broker_factory(self, factory) -> None:
+        self._broker_factory = factory
 
 
 __all__ = ["ExecutionEngine", "ExecutionReport"]

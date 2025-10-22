@@ -218,6 +218,47 @@ class Orchestrator:
             self._audit_logger.log("CONTROL", "TOKENS_UPDATED", "source=dashboard")
         return updated
 
+    def _refresh_tokens_from_disk(self, *, request_restart_on_change: bool = True) -> tuple[bool, str]:
+        if not self._config_path:
+            return False, "Configuration path unknown; cannot refresh tokens."
+        try:
+            fresh_config = load_config(self._config_path)
+        except Exception as exc:  # pragma: no cover - defensive reload guard
+            LOGGER.exception("Failed to reload configuration for tokens: %s", exc)
+            return False, f"Failed to reload configuration: {exc}"
+
+        self._config.datafeed.sandbox_token = fresh_config.datafeed.sandbox_token
+        self._config.datafeed.production_token = fresh_config.datafeed.production_token
+        self._config.datafeed.use_sandbox = fresh_config.datafeed.use_sandbox
+        self._config.datafeed.allow_tokenless = fresh_config.datafeed.allow_tokenless
+        self._config.system.mode = fresh_config.system.mode
+        self._config.execution.account_id = fresh_config.execution.account_id
+        self._config.brokers = fresh_config.brokers
+
+        previous = self._api_token or ""
+        self._api_token = self._resolve_api_token() or None
+        if self._api_token:
+            self._rest_api = TinkoffAPI(
+                token=self._api_token,
+                use_sandbox=self._config.datafeed.use_sandbox,
+                account_id=self._config.execution.account_id,
+            )
+        else:
+            self._rest_api = None
+        self._broker_factory_fn = self._broker_factory()
+        self._execution_engine.set_broker_factory(self._broker_factory_fn)
+
+        changed = previous != (self._api_token or "")
+        self._audit_logger.log(
+            "CONTROL",
+            "TOKENS_REFRESHED",
+            f"changed={str(changed).lower()};sandbox={self._config.datafeed.use_sandbox}",
+        )
+        if request_restart_on_change and changed:
+            self.request_restart()
+            return True, "Tokens refreshed; restart scheduled to apply changes."
+        return True, "Tokens refreshed."
+
     def _resolve_api_token(self) -> Optional[str]:
         token = (
             self._config.datafeed.sandbox_token
@@ -866,6 +907,150 @@ class Orchestrator:
         except Exception as exc:  # pragma: no cover - reload guard
             LOGGER.exception("Model reload after training failed: %s", exc)
         return True
+
+    async def _run_validation_once(self) -> None:
+        trainer = ModelTrainer(self._config.training)
+        try:
+            report = await asyncio.to_thread(trainer.train)
+        except Exception as exc:  # pragma: no cover - validation guard
+            LOGGER.exception("Validation run failed: %s", exc)
+            self._audit_logger.log("TRAINING", "VALIDATION_FAILED", str(exc))
+            return
+        detail = (
+            f"samples={report.samples};loss={report.training_loss:.4f};"
+            f"val={report.validation_loss:.4f}"
+        )
+        self._audit_logger.log("TRAINING", "VALIDATION_COMPLETED", detail)
+
+    def pause_trading(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            self._manual_override.activate("paused_by_dashboard")
+            self._risk_engine.trigger_emergency_halt("manual_pause")
+            self._audit_logger.log("CONTROL", "PAUSE", "source=dashboard")
+            return True, "Trading paused via manual override."
+
+        return self._invoke_threadsafe(_apply)
+
+    def resume_trading(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            self._manual_override.clear()
+            self._risk_engine.reset_halts()
+            self._audit_logger.log("CONTROL", "RESUME", "source=dashboard")
+            return True, "Manual override cleared; trading will resume when safe."
+
+        return self._invoke_threadsafe(_apply)
+
+    def reset_risk_limits(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            self._risk_engine.reset_halts()
+            self._audit_logger.log("CONTROL", "RISK_RESET", "source=dashboard")
+            return True, "Risk halts cleared."
+
+        return self._invoke_threadsafe(_apply)
+
+    def resynchronise_data(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            self._data_engine.resynchronise()
+            self._audit_logger.log("CONTROL", "DATA_RESYNC", "source=dashboard")
+            return True, "Data caches cleared."
+
+        return self._invoke_threadsafe(_apply)
+
+    def rebuild_features(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            self._feature_pipeline.reset_cache()
+            self._audit_logger.log("CONTROL", "FEATURE_RESET", "source=dashboard")
+            return True, "Feature pipeline cache cleared."
+
+        return self._invoke_threadsafe(_apply)
+
+    def cancel_all_orders(self) -> tuple[bool, str]:
+        async def _cancel() -> int:
+            return await self._execution_engine.cancel_all_orders()
+
+        loop = self._loop
+        try:
+            if loop and loop.is_running():
+                future = asyncio.run_coroutine_threadsafe(_cancel(), loop)
+                count = future.result(timeout=10)
+            else:
+                count = asyncio.run(_cancel())
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.exception("Cancel-all request failed: %s", exc)
+            return False, f"Failed to cancel orders: {exc}"
+
+        self._audit_logger.log("EXECUTION", "CANCEL_ALL", f"count={count}")
+        return True, f"Cancelled {count} orders."
+
+    def validate_models(self) -> tuple[bool, str]:
+        loop = self._loop
+
+        def _schedule() -> None:
+            async def _run() -> None:
+                await self._run_validation_once()
+
+            asyncio.create_task(_run())
+
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(_schedule)
+            return True, "Validation started in background."
+
+        def _thread_target() -> None:
+            asyncio.run(self._run_validation_once())
+
+        Thread(target=_thread_target, daemon=True).start()
+        return True, "Validation started in background."
+
+    def rollback_models(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            target_dir = Path(self._config.ml.model_dir)
+            try:
+                self._ml_engine.train_all_models(target_dir)
+                self._ml_engine.reload_models(target_dir)
+                self._ml_engine.update_weights(self._config.ml.weights)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.exception("Model rollback failed: %s", exc)
+                return False, f"Rollback failed: {exc}"
+            self._risk_engine.notify_model_reload()
+            self._audit_logger.log("TRAINING", "ROLLBACK", f"dir={target_dir}")
+            return True, "Models restored from packaged defaults."
+
+        return self._invoke_threadsafe(_apply)
+
+    def refresh_adapter_tokens(self) -> tuple[bool, str]:
+        return self._refresh_tokens_from_disk()
+
+    def switch_sandbox_mode(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            if not self._config_path:
+                return False, "Configuration path unknown; cannot toggle sandbox mode."
+            target = not self._config.datafeed.use_sandbox
+            try:
+                set_operational_mode(self._config_path, use_sandbox=target)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.exception("Failed to toggle sandbox flag: %s", exc)
+                return False, f"Failed to update configuration: {exc}"
+            self._config.datafeed.use_sandbox = target
+            success, message = self._refresh_tokens_from_disk(request_restart_on_change=False)
+            if success:
+                self.request_restart()
+            mode = "sandbox" if target else "production"
+            self._audit_logger.log("CONTROL", "SANDBOX_TOGGLED", f"mode={mode}")
+            return success, f"Switched to {mode}; {message.lower()}"
+
+        return self._invoke_threadsafe(_apply)
+
+    def restart_bus(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            self._stop_event_bus()
+            self._start_event_bus_if_needed()
+            return True, "Control bus restarted."
+
+        return self._invoke_threadsafe(_apply)
+
+    def emit_test_bus_event(self) -> tuple[bool, str]:
+        self._audit_logger.log("CONTROL", "BUS_TEST", "source=dashboard")
+        return True, "Test event recorded."
 
     def request_restart(self) -> None:
         """Signal that the orchestrator should restart after the current loop."""
@@ -1572,12 +1757,36 @@ class Orchestrator:
         bus = EventBus(self._config.bus.host, self._config.bus.port)
         bus.register("system.restart", lambda payload: self._handle_bus_restart())
         bus.register(
+            "system.pause",
+            lambda payload: self._handle_bus_result("pause", self.pause_trading()),
+        )
+        bus.register(
+            "system.resume",
+            lambda payload: self._handle_bus_result("resume", self.resume_trading()),
+        )
+        bus.register(
             "system.backtest",
+            lambda payload: self._handle_bus_result("backtest", self.trigger_backtest()),
+        )
+        bus.register(
+            "system.backtest.create",
             lambda payload: self._handle_bus_result("backtest", self.trigger_backtest()),
         )
         bus.register(
             "system.train",
             lambda payload: self._handle_bus_result("training", self.trigger_training()),
+        )
+        bus.register(
+            "ml.train",
+            lambda payload: self._handle_bus_result("training", self.trigger_training()),
+        )
+        bus.register(
+            "ml.validate",
+            lambda payload: self._handle_bus_result("validation", self.validate_models()),
+        )
+        bus.register(
+            "ml.rollback",
+            lambda payload: self._handle_bus_result("rollback", self.rollback_models()),
         )
         bus.register(
             "system.sandbox_forward",
@@ -1590,6 +1799,44 @@ class Orchestrator:
             lambda payload: self._handle_bus_result(
                 "forwardtest", self.start_sandbox_forward()
             ),
+        )
+        bus.register(
+            "system.forwardtest.start",
+            lambda payload: self._handle_bus_result(
+                "forwardtest", self.start_sandbox_forward()
+            ),
+        )
+        bus.register(
+            "risk.reset_stops",
+            lambda payload: self._handle_bus_result("risk_reset", self.reset_risk_limits()),
+        )
+        bus.register(
+            "exec.cancel_all",
+            lambda payload: self._handle_bus_result("cancel_all", self.cancel_all_orders()),
+        )
+        bus.register(
+            "features.resync",
+            lambda payload: self._handle_bus_result("data_resync", self.resynchronise_data()),
+        )
+        bus.register(
+            "features.rebuild",
+            lambda payload: self._handle_bus_result("feature_reset", self.rebuild_features()),
+        )
+        bus.register(
+            "adapter.refresh_tokens",
+            lambda payload: self._handle_bus_result("tokens_refresh", self.refresh_adapter_tokens()),
+        )
+        bus.register(
+            "adapter.switch_sandbox",
+            lambda payload: self._handle_bus_result("sandbox_switch", self.switch_sandbox_mode()),
+        )
+        bus.register(
+            "bus.restart",
+            lambda payload: self._handle_bus_result("bus_restart", self.restart_bus()),
+        )
+        bus.register(
+            "bus.test_event",
+            lambda payload: self._handle_bus_result("bus_test", self.emit_test_bus_event()),
         )
         bus.register("instrument.replace", self._handle_bus_instrument_replace)
         try:

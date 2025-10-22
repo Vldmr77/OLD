@@ -60,6 +60,16 @@ def test_risk_engine_halts_on_critical_drift():
     assert engine.trading_halted() is True
 
 
+def test_risk_engine_reset_halts_clears_state():
+    engine = RiskEngine(RiskLimits())
+    engine.trigger_emergency_halt("manual")
+    assert engine.trading_halted() is True
+
+    engine.reset_halts()
+
+    assert engine.trading_halted() is False
+
+
 def test_risk_engine_triggers_vwap_strategy():
     limits = RiskLimits(
         max_position=500,

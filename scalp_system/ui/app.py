@@ -46,6 +46,11 @@ class ScreenContext:
 class DashboardApp:
     """Coordinator for Tkinter dashboard screens."""
 
+    _COMMAND_ALIASES: Dict[str, str] = {
+        "system.backtest.create": "system.backtest",
+        "system.forwardtest.start": "system.forwardtest",
+    }
+
     def __init__(
         self,
         *,
@@ -256,10 +261,11 @@ class DashboardApp:
         if name is None:
             self._refresh()
             return True
+        canonical = self._COMMAND_ALIASES.get(name, name)
         try:
             if self._bus_client.is_up():
-                self._bus_client.emit(name, args)
-                self._notify("info", RU["evt_ok_title"], RU["evt_ok_msg"].format(name=name))
+                self._bus_client.emit(canonical, args)
+                self._notify("info", RU["evt_ok_title"], RU["evt_ok_msg"].format(name=canonical))
                 return True
             LOGGER.debug("Bus unavailable; falling back to callback for %s", name)
         except Exception as exc:  # pragma: no cover - defensive
@@ -267,17 +273,13 @@ class DashboardApp:
             self._notify("error", RU["evt_err_title"], str(exc))
             return False
 
-        callback = None
-        if name == "system.restart":
-            callback = self._restart_callback
-        elif name == "system.backtest.create":
-            callback = self._backtest_callback
-        elif name == "system.forwardtest.start":
-            callback = self._sandbox_forward_callback
-        elif name == "ml.train":
-            callback = self._training_callback
-        elif name == "ml.validate":
-            callback = self._training_callback
+        fallback_map = {
+            "system.restart": self._restart_callback,
+            "system.backtest": self._backtest_callback,
+            "system.forwardtest": self._sandbox_forward_callback,
+            "ml.train": self._training_callback,
+        }
+        callback = fallback_map.get(canonical)
         if callback is None:
             self._notify("warning", RU["bus_down"], RU["bus_down_msg"])
             return False

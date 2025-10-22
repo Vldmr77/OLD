@@ -57,3 +57,14 @@ def test_manual_override_poll_interval_positive(tmp_path):
     guard = ManualOverrideGuard(config)
 
     assert guard.poll_interval > 0
+
+
+def test_manual_override_activate_writes_flag(tmp_path):
+    config = ManualOverrideConfig(enabled=True, flag_path=tmp_path / "flag")
+    guard = ManualOverrideGuard(config)
+
+    guard.activate("paused")
+
+    status = guard.status()
+    assert status.halted is True
+    assert config.flag_path.read_text(encoding="utf-8").strip() == "paused"
