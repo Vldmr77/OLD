@@ -1,8 +1,10 @@
+import socket
 from pathlib import Path
 
 import pytest
 import yaml
 
+from scalp_system.cli import dashboard as dashboard_cli
 from scalp_system.config.base import OrchestratorConfig
 from scalp_system.orchestrator import Orchestrator
 from scalp_system.storage.repository import SQLiteRepository
@@ -131,6 +133,115 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
     assert callable(calls["backtest_callback"])
     assert callable(calls["training_callback"])
     assert calls["bus_address"] is None
+
+
+def _get_free_port() -> int:
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+    finally:
+        sock.close()
+
+
+def test_orchestrator_provides_bus_address_when_bus_running(monkeypatch, tmp_path):
+    config = _build_config(tmp_path, auto_start=True)
+    config.bus.enabled = True
+    config.bus.port = _get_free_port()
+
+    calls: dict[str, object] = {}
+
+    def fake_run_dashboard(*args, **kwargs):
+        calls.update(kwargs)
+
+        class DummyThread:
+            pass
+
+        return DummyThread()
+
+    monkeypatch.setattr("scalp_system.orchestrator.run_dashboard", fake_run_dashboard)
+
+    orchestrator = Orchestrator(config)
+    orchestrator._start_event_bus_if_needed()
+    try:
+        orchestrator._start_dashboard_if_needed()
+        assert calls["bus_address"] == (
+            config.bus.host,
+            orchestrator._event_bus.port,  # type: ignore[attr-defined]
+        )
+    finally:
+        orchestrator._stop_event_bus()
+
+
+def test_cli_dashboard_disables_controls_without_bus(monkeypatch, tmp_path):
+    config = _build_config(tmp_path)
+    config.bus.enabled = True
+
+    monkeypatch.setattr(
+        "scalp_system.cli.dashboard.load_config", lambda path: config
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_dashboard(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("scalp_system.cli.dashboard.run_dashboard", fake_run_dashboard)
+
+    class DummyBus:
+        def __init__(self, *args, **kwargs):
+            self._checked = False
+
+        def check_available(self) -> bool:
+            return False
+
+    monkeypatch.setattr("scalp_system.cli.dashboard.BusClient", DummyBus)
+
+    dashboard_cli.main(["--repository", str(tmp_path / "signals.db"), "--config", "dummy.yaml"])
+
+    assert captured["restart_callback"] is None
+    assert captured["instrument_replace_callback"] is None
+    assert captured["sandbox_forward_callback"] is None
+    assert captured["backtest_callback"] is None
+    assert captured["training_callback"] is None
+    assert captured["bus_address"] is None
+
+
+def test_cli_dashboard_enables_controls_with_bus(monkeypatch, tmp_path):
+    config = _build_config(tmp_path)
+    config.bus.enabled = True
+
+    monkeypatch.setattr(
+        "scalp_system.cli.dashboard.load_config", lambda path: config
+    )
+
+    captured: dict[str, object] = {}
+
+    def fake_run_dashboard(*args, **kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr("scalp_system.cli.dashboard.run_dashboard", fake_run_dashboard)
+
+    class DummyBus:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def check_available(self) -> bool:
+            return True
+
+        def emit_event(self, event):
+            pass
+
+    monkeypatch.setattr("scalp_system.cli.dashboard.BusClient", DummyBus)
+
+    dashboard_cli.main(["--repository", str(tmp_path / "signals.db"), "--config", "dummy.yaml"])
+
+    assert callable(captured["restart_callback"])
+    assert callable(captured["instrument_replace_callback"])
+    assert callable(captured["sandbox_forward_callback"])
+    assert callable(captured["backtest_callback"])
+    assert callable(captured["training_callback"])
+    assert captured["bus_address"] == (config.bus.host, config.bus.port)
 
 
 def test_replace_instrument_updates_data_engine(tmp_path):
