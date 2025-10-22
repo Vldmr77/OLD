@@ -1887,11 +1887,33 @@ class Orchestrator:
             finally:
                 self._dashboard_process = None
 
+    @staticmethod
+    def _display_available() -> bool:
+        """Return True if a GUI display appears to be available."""
+
+        if sys.platform.startswith("linux"):
+            return bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        return True
+
     def _start_dashboard_if_needed(self) -> None:
         self._cleanup_dashboard_handles()
         if self._dashboard_process is not None or self._dashboard_thread is not None:
             return
         if not self._config.dashboard.auto_start:
+            return
+        if (
+            not self._config.dashboard.headless
+            and not self._display_available()
+            and not os.environ.get("SCALP_FORCE_DASHBOARD")
+        ):
+            LOGGER.warning(
+                "Display not detected; skipping dashboard launch. Set DISPLAY or enable headless mode to run the UI."
+            )
+            self._audit_logger.log(
+                "UI",
+                "DASHBOARD_SKIPPED",
+                "reason=display-unavailable",
+            )
             return
         if not self._config.dashboard.headless:
             python_exe = sys.executable or "python"

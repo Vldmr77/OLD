@@ -194,6 +194,8 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
     config.dashboard.title = "Proc UI"
     config.dashboard.repository_path = tmp_path / "runtime" / "signals.db"
 
+    monkeypatch.setenv("DISPLAY", ":0")
+
     captured: dict[str, object] = {}
 
     class DummyProcess:
@@ -226,6 +228,29 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
     assert captured["args"][0] == sys.executable
     assert "scalp_system.cli.dashboard" in captured["args"]
     assert "--repository" in captured["args"]
+
+
+def test_orchestrator_skips_dashboard_when_no_display(monkeypatch, tmp_path, caplog):
+    config = _build_config(tmp_path, auto_start=True)
+    config.dashboard.headless = False
+
+    def fail_run_dashboard(*_, **__):  # pragma: no cover - should not be called
+        raise AssertionError("dashboard should not launch without display")
+
+    monkeypatch.setattr("scalp_system.orchestrator.run_dashboard", fail_run_dashboard)
+    monkeypatch.setenv("DISPLAY", "")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setattr(
+        "scalp_system.orchestrator.Orchestrator._display_available",
+        staticmethod(lambda: False),
+    )
+
+    orchestrator = Orchestrator(config)
+
+    with caplog.at_level("WARNING"):
+        orchestrator._start_dashboard_if_needed()
+
+    assert "Display not detected" in caplog.text
 
 def test_cli_dashboard_omits_bus_when_unavailable(monkeypatch, tmp_path):
     config = _build_config(tmp_path)
