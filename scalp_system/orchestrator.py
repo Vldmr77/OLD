@@ -572,10 +572,14 @@ class Orchestrator:
             }
             for pos in risk_snapshot.get("positions", [])
         ]
+        risk_capital = getattr(self._config.risk, "capital_base", 0.0)
+        risk_limit_pct = getattr(self._config.risk, "daily_loss_limit_pct", 0.0)
+        daily_stop_value = round(risk_capital * risk_limit_pct, 2)
         risk_params = {
             "max_position": self._config.risk.max_position,
             "max_exposure_pct": self._config.risk.max_exposure_pct,
-            "daily_stop": self._config.risk.daily_loss_limit,
+            "daily_stop": daily_stop_value,
+            "daily_stop_pct": risk_limit_pct,
         }
 
         execution_info = {

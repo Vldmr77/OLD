@@ -5,6 +5,7 @@ import json
 import logging
 import threading
 from dataclasses import dataclass
+from queue import Empty, Queue
 from typing import Callable, Dict, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -80,12 +81,10 @@ class DashboardApp:
         self._root: tk.Tk | None = None  # type: ignore[assignment]
         self._notebook: ttk.Notebook | None = None  # type: ignore[assignment]
         self._screens: list[object] = []
-        self._status_job: str | None = None
         self._events_unsubscribe: Callable[[], None] | None = None
-
-        if not self._headless:
-            self._build_ui()
-            self._configure_bindings()
+        self._status_queue: Queue[dict] = Queue()
+        self._status_thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -146,41 +145,82 @@ class DashboardApp:
     # ------------------------------------------------------------------
     def run(self) -> None:
         if self._headless:
-            self._refresh()
+            payload = self._fetch_status_payload()
+            if payload:
+                self._state.update_from_status(payload)
             return
+        if self._root is None:
+            self._build_ui()
+            self._configure_bindings()
         assert self._root is not None
-        self._refresh()
+        self._stop_event.clear()
+        self._status_thread = threading.Thread(target=self._status_worker, daemon=True)
+        self._status_thread.start()
+        self._pump_ui()
+        assert self._root is not None
         self._events_unsubscribe = self._bus_client.subscribe(self._handle_event)
         try:
             self._root.mainloop()
         finally:
             if self._events_unsubscribe:
                 self._events_unsubscribe()
+            self._stop_event.set()
+            if self._status_thread:
+                self._status_thread.join(timeout=2.0)
 
     # ------------------------------------------------------------------
     def _refresh(self) -> None:
-        payload = self._fetch_status()
-        if payload is not None:
+        payload = self._fetch_status_payload()
+        if payload:
             self._state.update_from_status(payload)
             self._update_screens()
-        if not self._headless and self._root is not None:
-            self._status_job = self._root.after(self._refresh_interval_ms, self._refresh)
 
     # ------------------------------------------------------------------
-    def _fetch_status(self) -> dict | None:
+    def _fetch_status_payload(self) -> dict | None:
         if self._status_endpoint:
             try:
                 with urlopen(self._status_endpoint, timeout=2) as response:  # nosec B310
                     return json.load(response)
             except URLError as exc:
                 LOGGER.debug("Status endpoint unavailable: %s", exc)
-                return None
+                if not self._status_provider:
+                    return {"error": {"source": "endpoint", "message": str(exc)}}
         if self._status_provider:
             try:
                 return self._status_provider()
             except Exception as exc:  # pragma: no cover - defensive
                 LOGGER.exception("Status provider failed: %s", exc)
+                return {"error": {"source": "provider", "message": str(exc)}}
         return None
+
+    # ------------------------------------------------------------------
+    def _status_worker(self) -> None:
+        interval = max(self._refresh_interval_ms / 1000.0, 0.25)
+        while not self._stop_event.is_set():
+            payload = self._fetch_status_payload()
+            if payload is not None:
+                self._status_queue.put(payload)
+            if self._stop_event.wait(interval):
+                break
+
+    # ------------------------------------------------------------------
+    def _pump_ui(self) -> None:
+        if self._headless or self._root is None:
+            return
+        try:
+            while True:
+                payload = self._status_queue.get_nowait()
+                if payload.get("error"):
+                    message = payload["error"].get("message", "")
+                    LOGGER.error("Status provider error: %s", message)
+                    self._notify("error", RU["evt_err_title"], message or RU["status_error"])
+                    continue
+                self._state.update_from_status(payload)
+                self._update_screens()
+        except Empty:
+            pass
+        finally:
+            self._root.after(200, self._pump_ui)
 
     # ------------------------------------------------------------------
     def _update_screens(self) -> None:
