@@ -17,11 +17,11 @@ class DataFeaturesScreen:
         if ttk is None:
             return
         self._context = context
-        frame = ttk.Frame(context.notebook)
+        frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(frame, text=context.strings["tab_data_features"])
         self._frame = frame
 
-        pipeline = ttk.Frame(frame)
+        pipeline = ttk.Frame(frame, style="Dashboard.Section.TFrame")
         pipeline.pack(fill="x", padx=8, pady=8)
         for idx, text_key in enumerate(
             [
@@ -36,7 +36,7 @@ class DataFeaturesScreen:
                 "data_export",
             ]
         ):
-            box = ttk.Label(pipeline, text=RU[text_key], relief="groove", padding=8)
+            box = ttk.Label(pipeline, text=RU[text_key], style="Dashboard.Stage.TLabel")
             box.grid(row=idx // 3, column=idx % 3, padx=4, pady=4, sticky="ew")
             pipeline.columnconfigure(idx % 3, weight=1)
 
@@ -48,7 +48,7 @@ class DataFeaturesScreen:
         self._queues = SimpleTable(queue_frame, ["queue", "size"], height=6)
         self._queues.pack(fill="both", expand=True)
 
-        buttons = ttk.Frame(frame)
+        buttons = ttk.Frame(frame, style="Dashboard.Section.TFrame")
         buttons.pack(fill="x", padx=8, pady=4)
         self._buttons = [
             ttk.Button(buttons, text=RU["btn_resync"], command=lambda: context.emit("features.resync")),

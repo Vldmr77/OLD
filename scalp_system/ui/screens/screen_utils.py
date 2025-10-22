@@ -10,7 +10,7 @@ except Exception:  # pragma: no cover
 def create_section(parent, title: str, *, pack: bool = True, **pack_kwargs):
     if ttk is None:
         return None
-    frame = ttk.LabelFrame(parent, text=title)
+    frame = ttk.LabelFrame(parent, text=title, style="Dashboard.TLabelframe")
     if pack:
         options = {"fill": "both", "expand": True, "padx": 8, "pady": 6}
         options.update(pack_kwargs)

@@ -13,6 +13,7 @@ from urllib.request import urlopen
 from .bus_client import DashboardBusClient
 from .i18n import RU
 from .state import State
+from .theme import apply_theme
 
 try:  # pragma: no cover - optional in headless environments
     import tkinter as tk  # type: ignore
@@ -85,14 +86,32 @@ class DashboardApp:
         self._status_queue: Queue[dict] = Queue()
         self._status_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._subtitle_var: tk.StringVar | None = None  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         assert tk is not None and ttk is not None
         self._root = tk.Tk()
+        apply_theme(self._root)
         self._root.title(self._title)
-        self._root.geometry("1200x800")
-        self._notebook = ttk.Notebook(self._root)
+        self._root.geometry("1280x860")
+        self._root.minsize(1120, 720)
+
+        banner = ttk.Frame(self._root, style="DashboardBanner.TFrame")
+        banner.pack(fill="x", padx=16, pady=(16, 8))
+        title_label = ttk.Label(banner, text=self._title, style="DashboardBanner.Title.TLabel")
+        title_label.pack(side="left")
+        self._subtitle_var = tk.StringVar(value="")
+        subtitle_label = ttk.Label(
+            banner,
+            textvariable=self._subtitle_var,
+            style="DashboardBanner.Subtitle.TLabel",
+        )
+        subtitle_label.pack(side="right")
+
+        container = ttk.Frame(self._root, style="Dashboard.Section.TFrame")
+        container.pack(fill="both", expand=True, padx=16, pady=(0, 16))
+        self._notebook = ttk.Notebook(container, style="Dashboard.TNotebook")
         self._notebook.pack(fill="both", expand=True)
 
         from .screens import (
@@ -230,6 +249,7 @@ class DashboardApp:
             update = getattr(screen, "update", None)
             if callable(update):
                 update()
+        self._update_banner()
 
     # ------------------------------------------------------------------
     def _emit_command(self, name: str | None, args: Optional[dict] = None) -> bool:
@@ -332,6 +352,42 @@ class DashboardApp:
             messagebox.showwarning(title, message)
         else:
             messagebox.showinfo(title, message)
+
+    # ------------------------------------------------------------------
+    def _update_banner(self) -> None:
+        if self._headless or self._subtitle_var is None:
+            return
+        build = self._state.get("build", {}) or {}
+        mode = str(build.get("mode", "offline")).upper()
+        uptime = build.get("uptime_s")
+        uptime_text = self._format_uptime(uptime)
+        bus_state_raw = str(self._state.get("bus.state", "unknown")).lower()
+        if bus_state_raw == "up":
+            bus_display = RU["banner_bus_up"]
+        elif bus_state_raw == "down":
+            bus_display = RU["banner_bus_down"]
+        else:
+            bus_display = RU["banner_bus_unknown"]
+        parts = [f"{RU['status_mode']}: {mode}", f"{RU['banner_bus']}: {bus_display}"]
+        if uptime_text:
+            parts.append(f"{RU['banner_uptime']}: {uptime_text}")
+        alerts = self._state.alerts()
+        if alerts:
+            parts.append(f"{RU['banner_alerts']}: {len(alerts)}")
+        self._subtitle_var.set("  •  ".join(parts))
+
+    @staticmethod
+    def _format_uptime(value: object) -> str:
+        if isinstance(value, (int, float)) and value >= 0:
+            total = int(value)
+            hours, rem = divmod(total, 3600)
+            minutes, seconds = divmod(rem, 60)
+            if hours:
+                return f"{hours}ч {minutes:02d}м"
+            if minutes:
+                return f"{minutes}м {seconds:02d}с"
+            return f"{seconds}с"
+        return ""
 
 
 def run_dashboard(

@@ -11,15 +11,27 @@ except Exception:  # pragma: no cover
     tk = None  # type: ignore
     ttk = None  # type: ignore
 
+from ..theme import PALETTE
+
 
 class LogTail(ttk.Frame):  # type: ignore[misc]
     """Simple scrollable buffer for log lines."""
 
     def __init__(self, master: tk.Misc, *, max_lines: int = 500) -> None:  # type: ignore[valid-type]
-        super().__init__(master)
+        super().__init__(master, style="Dashboard.Section.TFrame")
         self._max_lines = max_lines
         self._buffer = collections.deque(maxlen=max_lines)
-        self._text = tk.Text(self, height=15, state="disabled", wrap="none", background="#111", foreground="#eee")
+        self._text = tk.Text(
+            self,
+            height=15,
+            state="disabled",
+            wrap="none",
+            background=PALETTE.surface_alt,
+            foreground=PALETTE.text,
+            insertbackground=PALETTE.text,
+            relief="flat",
+            borderwidth=0,
+        )
         y_scroll = ttk.Scrollbar(self, orient="vertical", command=self._text.yview)
         self._text.configure(yscrollcommand=y_scroll.set)
         self._text.grid(row=0, column=0, sticky="nsew")

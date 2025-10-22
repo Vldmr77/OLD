@@ -36,11 +36,11 @@ class OverviewScreen:
         if ttk is None:
             return
         self._context = context
-        self._frame = ttk.Frame(context.notebook)
+        self._frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(self._frame, text=context.strings["tab_overview"])
         self._state: State = context.state
         self._graph = StatusGraph(self._frame)
-        self._graph.pack(fill="x", padx=8, pady=8)
+        self._graph.pack(fill="x", padx=8, pady=12)
 
         modules_frame = create_section(self._frame, RU["module_header"])
         self._module_table = SimpleTable(modules_frame, ["module", "state", "detail"], height=6)
@@ -66,7 +66,7 @@ class OverviewScreen:
         self._metrics = KeyValueMeter(metrics_frame)
         self._metrics.pack(anchor="w", padx=8, pady=4)
 
-        actions = ttk.Frame(self._frame)
+        actions = ttk.Frame(self._frame, style="Dashboard.Section.TFrame")
         actions.pack(fill="x", padx=8, pady=4)
         self._buttons: list[tuple[object, bool]] = []
         for text_key, command, requires_bus in [

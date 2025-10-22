@@ -10,23 +10,30 @@ except Exception:  # pragma: no cover
 
 
 class KeyValueMeter(ttk.Frame):  # type: ignore[misc]
-    """Display a small table of metrics."""
+    """Display metrics as compact coloured badges."""
 
     def __init__(self, master: tk.Misc) -> None:  # type: ignore[valid-type]
-        super().__init__(master)
-        self._labels: dict[str, tk.StringVar] = {}
+        super().__init__(master, style="Dashboard.Section.TFrame")
+        self._cards: dict[str, tuple[ttk.Label, ttk.Label]] = {}
 
     def update_metrics(self, metrics: dict[str, object]) -> None:
+        self._cards = {}
+        for widget in self.winfo_children():
+            widget.destroy()
+
         for index, (name, value) in enumerate(metrics.items()):
-            if name not in self._labels:
-                label = ttk.Label(self, text=f"{name}: ")
-                var = tk.StringVar(value=str(value))
-                value_label = ttk.Label(self, textvariable=var)
-                label.grid(row=index, column=0, sticky="w", padx=4)
-                value_label.grid(row=index, column=1, sticky="w", padx=4)
-                self._labels[name] = var
-            else:
-                self._labels[name].set(str(value))
+            row, column = divmod(index, 3)
+            card = ttk.Frame(self, style="DashboardBadge.TFrame")
+            card.grid(row=row, column=column, padx=6, pady=6, sticky="nsew")
+            title = ttk.Label(card, text=str(name).upper(), style="DashboardBadge.Title.TLabel")
+            title.pack(anchor="w")
+            value_label = ttk.Label(card, text=str(value), style="DashboardBadge.Value.TLabel")
+            value_label.pack(anchor="w", pady=(2, 0))
+            self._cards[name] = (title, value_label)
+
+        max_columns = max(1, min(3, len(metrics)))
+        for column in range(max_columns):
+            self.columnconfigure(column, weight=1)
 
 
 __all__ = ["KeyValueMeter"]

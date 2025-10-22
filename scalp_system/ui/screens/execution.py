@@ -18,7 +18,7 @@ class ExecutionScreen:
         if ttk is None:
             return
         self._context = context
-        frame = ttk.Frame(context.notebook)
+        frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(frame, text=context.strings["tab_execution"])
 
         queue_frame = create_section(frame, RU["exec_queue"])
@@ -37,7 +37,7 @@ class ExecutionScreen:
         self._stats = KeyValueMeter(stats_frame)
         self._stats.pack(anchor="w", padx=8, pady=4)
 
-        buttons = ttk.Frame(frame)
+        buttons = ttk.Frame(frame, style="Dashboard.Section.TFrame")
         buttons.pack(fill="x", padx=8, pady=4)
         self._buttons = [
             ttk.Button(buttons, text=RU["btn_pause"], command=lambda: context.emit("system.pause")),

@@ -17,7 +17,7 @@ class RiskScreen:
         if ttk is None:
             return
         self._context = context
-        frame = ttk.Frame(context.notebook)
+        frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(frame, text=context.strings["tab_risk"])
 
         profiles = create_section(frame, RU["risk_profiles"])
@@ -40,10 +40,12 @@ class RiskScreen:
         self._log = SimpleTable(log_frame, ["timestamp", "decision"], height=4)
         self._log.pack(fill="both", expand=True)
 
+        controls = ttk.Frame(frame, style="Dashboard.Section.TFrame")
+        controls.pack(fill="x", padx=8, pady=6)
         self._reset_button = ttk.Button(
-            frame, text=RU["btn_reset_risk"], command=lambda: context.emit("risk.reset_stops")
+            controls, text=RU["btn_reset_risk"], command=lambda: context.emit("risk.reset_stops")
         )
-        self._reset_button.pack(anchor="w", padx=8, pady=6)
+        self._reset_button.pack(side="left")
 
     def update(self) -> None:
         if ttk is None:

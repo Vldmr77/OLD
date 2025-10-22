@@ -6,16 +6,18 @@ try:  # pragma: no cover - tkinter not available in headless tests
 except Exception:  # pragma: no cover
     tk = None  # type: ignore
 
+from ..theme import PALETTE
+
 STATE_COLOURS = {
-    "ready": "#3CB371",
-    "running": "#3CB371",
-    "active": "#3CB371",
-    "paused": "#D3D3D3",
-    "idle": "#D3D3D3",
-    "error": "#CD5C5C",
-    "failed": "#CD5C5C",
-    "warning": "#F0E68C",
-    "unknown": "#B0B0B0",
+    "ready": PALETTE.accent_alt,
+    "running": PALETTE.accent_alt,
+    "active": PALETTE.accent_alt,
+    "paused": PALETTE.surface_alt,
+    "idle": PALETTE.surface_alt,
+    "error": PALETTE.error,
+    "failed": PALETTE.error,
+    "warning": PALETTE.warning,
+    "unknown": "#4b5563",
 }
 
 
@@ -55,7 +57,7 @@ class StatusGraph(tk.Canvas):  # type: ignore[misc]
 
     def __init__(self, master: tk.Misc) -> None:  # type: ignore[valid-type]
         super().__init__(master, width=self.WIDTH, height=self.HEIGHT, highlightthickness=0)
-        self.configure(bg="#1E1E1E")
+        self.configure(bg=PALETTE.surface, bd=0)
         self._node_items: dict[str, int] = {}
         self._label_items: dict[str, int] = {}
         self._draw_static()
@@ -66,10 +68,31 @@ class StatusGraph(tk.Canvas):  # type: ignore[misc]
         for start, end in self.CONNECTIONS:
             sx1, sy1, sx2, sy2, _ = self.NODES[start]
             ex1, ey1, ex2, ey2, _ = self.NODES[end]
-            self.create_line((sx2, (sy1 + sy2) / 2), (ex1, (ey1 + ey2) / 2), fill="#808080", width=2)
+            self.create_line(
+                (sx2, (sy1 + sy2) / 2),
+                (ex1, (ey1 + ey2) / 2),
+                fill=PALETTE.outline,
+                width=2,
+                arrow=tk.LAST,
+                arrowshape=(12, 12, 4),
+            )
         for key, (x1, y1, x2, y2, label) in self.NODES.items():
-            rect = self.create_rectangle(x1, y1, x2, y2, fill=STATE_COLOURS["idle"], outline="")
-            text = self.create_text((x1 + x2) / 2, (y1 + y2) / 2, text=label, fill="white", font=("Arial", 11))
+            rect = self.create_rectangle(
+                x1,
+                y1,
+                x2,
+                y2,
+                fill=STATE_COLOURS["idle"],
+                outline=PALETTE.outline,
+                width=1.5,
+            )
+            text = self.create_text(
+                (x1 + x2) / 2,
+                (y1 + y2) / 2,
+                text=label,
+                fill=PALETTE.text,
+                font=("Segoe UI", 11),
+            )
             self._node_items[key] = rect
             self._label_items[key] = text
 

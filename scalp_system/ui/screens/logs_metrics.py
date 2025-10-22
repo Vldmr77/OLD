@@ -19,7 +19,7 @@ class LogsMetricsScreen:
         if ttk is None:
             return
         self._context = context
-        frame = ttk.Frame(context.notebook)
+        frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(frame, text=context.strings["tab_logs"])
 
         filters = create_section(frame, RU["logs_filters"])

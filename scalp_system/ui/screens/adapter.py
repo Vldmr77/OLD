@@ -18,7 +18,7 @@ class AdapterScreen:
         if ttk is None:
             return
         self._context = context
-        frame = ttk.Frame(context.notebook)
+        frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(frame, text=context.strings["tab_adapter"])
 
         tokens_frame = create_section(frame, RU["adapter_tokens"])
@@ -52,7 +52,7 @@ class AdapterScreen:
         self._diag = KeyValueMeter(diag_frame)
         self._diag.pack(anchor="w", padx=8, pady=4)
 
-        buttons = ttk.Frame(frame)
+        buttons = ttk.Frame(frame, style="Dashboard.Section.TFrame")
         buttons.pack(fill="x", padx=8, pady=4)
         self._bus_buttons = [
             ttk.Button(buttons, text=RU["btn_update_quota"], command=lambda: context.emit("adapter.refresh_tokens")),

@@ -17,7 +17,7 @@ class MLScreen:
         if ttk is None:
             return
         self._context = context
-        frame = ttk.Frame(context.notebook)
+        frame = ttk.Frame(context.notebook, style="Dashboard.Section.TFrame")
         context.notebook.add(frame, text=context.strings["tab_ml"])
         self._frame = frame
 
@@ -41,7 +41,7 @@ class MLScreen:
         self._artifacts_table = SimpleTable(artifacts_frame, ["version", "created", "note"], height=4)
         self._artifacts_table.pack(fill="both", expand=True)
 
-        buttons = ttk.Frame(frame)
+        buttons = ttk.Frame(frame, style="Dashboard.Section.TFrame")
         buttons.pack(fill="x", padx=8, pady=4)
         self._buttons = [
             ttk.Button(buttons, text=RU["btn_train"], command=lambda: context.emit("ml.train")),
