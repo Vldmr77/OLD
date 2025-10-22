@@ -146,6 +146,12 @@ execution:
   account_id: ""
 storage:
   base_path: ./runtime
+  orderbooks_path: ./runtime/orderbooks.db
+  trades_path: ./runtime/trades
+  candles_path: ./runtime/candles
+  features_path: ./runtime/features
+  parquet_compression: snappy
+  enable_zstd: true
   cache_flush_min_seconds: 1.0
   cache_flush_max_seconds: 5.0
   cache_target_buffer: 50

@@ -19,7 +19,7 @@
 - `scalp_system.monitoring.notifications` — Telegram-уведомления и звуковые сигналы.
 - `scalp_system.monitoring.reporting` — формирование периодических отчётов по результатам.
 - `scalp_system.ml.calibration` — постановка задач калибровки моделей.
-- `scalp_system.storage` — SQLite репозиторий для логирования сигналов.
+- `scalp_system.storage` — историческое хранилище (SQLite/CSV/Parquet) и репозиторий сигналов.
 - `scalp_system.ui` — лёгкий встроенный HTTP-дэшборд для просмотра сигналов и состояний.
 - `scalp_system.storage.disaster_recovery` — резервные копии критичных артефактов.
 - `scalp_system.utils.integrity` — проверки целостности данных при переподключении.
@@ -110,6 +110,24 @@ python -m scalp_system.cli.dashboard --repository ./runtime/signals.sqlite3 --ho
 
 После запуска перейдите в браузере по адресу `http://<host>:<port>/`, чтобы увидеть таблицу сигналов и
 резюме. Для интеграции в инфраструктуру дэшборд можно запускать в отдельном процессе либо контейнере.
+
+### Историческое хранилище данных
+
+Подсистема `scalp_system.storage.historical` сохраняет рыночные данные в формате, описанном в ТЗ:
+
+- **Стаканы**: SQLite база `orderbooks.db` с таблицей `l2`. При наличии `zstandard` полезная нагрузка
+  хранится в сжатом виде, иначе данные записываются как JSON без компрессии.
+- **Сделки**: CSV-файлы в каталоге `storage.trades_path`, один файл на FIGI с колонками
+  `timestamp,price,quantity,direction`.
+- **Свечи и фичи**: Партиции Parquet в подпапках `storage.candles_path/<FIGI>` и
+  `storage.features_path/<FIGI>`. Если `pyarrow` недоступен, автоматически создаются JSONL-файлы с теми же
+  данными, что позволяет хранить историю даже в минимальной офлайн-среде.
+
+Все пути настраиваются в секции `storage` конфигурации (`orderbooks_path`, `trades_path`, `candles_path`,
+`features_path`, `parquet_compression`, `enable_zstd`). Оркестратор записывает данные как при
+инициализации через REST, так и в основном цикле обработки, поэтому историческая база пополняется в
+реальном времени. Репозиторий сигналов по-прежнему располагается в `dashboard.repository_path` и может
+храниться рядом с историческими артефактами.
 
 ## Дополнительные утилиты
 

@@ -42,6 +42,7 @@ from .risk.engine import PositionAdjustment, RiskEngine
 from .security import KeyManager
 from .storage.checkpoint import CheckpointManager
 from .storage.disaster_recovery import DisasterRecoveryManager
+from .storage.historical import HistoricalDataStorage
 from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
@@ -64,6 +65,15 @@ class Orchestrator:
             cache_min_interval=config.storage.cache_flush_min_seconds,
             cache_max_interval=config.storage.cache_flush_max_seconds,
             cache_target_buffer=config.storage.cache_target_buffer,
+        )
+        self._historical_storage = HistoricalDataStorage(
+            config.storage.base_path,
+            orderbook_path=config.storage.orderbooks_path,
+            trades_path=config.storage.trades_path,
+            candles_path=config.storage.candles_path,
+            features_path=config.storage.features_path,
+            enable_zstd=config.storage.enable_zstd,
+            parquet_compression=config.storage.parquet_compression,
         )
         self._drift_detector = DriftDetector(
             threshold=config.ml.drift_threshold,
@@ -280,11 +290,15 @@ class Orchestrator:
                 LOGGER.warning("Failed to bootstrap order book for %s: %s", figi, exc)
             else:
                 self._data_engine.ingest_order_book(order_book)
+                with suppress(Exception):
+                    self._historical_storage.store_order_book(order_book)
             try:
                 trades = await self._rest_api.fetch_trades(
                     figi, limit=self._config.datafeed.trade_history_size
                 )
                 self._data_engine.ingest_trades(figi, trades)
+                with suppress(Exception):
+                    self._historical_storage.store_trades(trades)
             except Exception as exc:  # pragma: no cover - network guard
                 LOGGER.debug("Failed to fetch trades for %s: %s", figi, exc)
             try:
@@ -295,6 +309,8 @@ class Orchestrator:
                     self._config.datafeed.candle_interval,
                 )
                 self._data_engine.ingest_candles(figi, candles)
+                with suppress(Exception):
+                    self._historical_storage.store_candles(candles)
             except Exception as exc:  # pragma: no cover - network guard
                 LOGGER.debug("Failed to fetch candles for %s: %s", figi, exc)
         try:
@@ -695,6 +711,8 @@ class Orchestrator:
                     )
                     self._audit_logger.log("RESOURCE", action.upper(), detail)
                 self._data_engine.ingest_order_book(order_book)
+                with suppress(Exception):
+                    self._historical_storage.store_order_book(order_book)
                 self._heartbeat.record_beat(order_book.figi)
                 recovery = self._connectivity.record_success()
                 if recovery and recovery.kind == "recovery":
@@ -730,6 +748,8 @@ class Orchestrator:
                 with timed("features", self._handle_latency):
                     market = self._data_engine.market_indicators()
                     features = self._feature_pipeline.transform(window, market=market)
+                with suppress(Exception):
+                    self._historical_storage.store_features(features)
                 signals: list[MLSignal] = []
                 try:
                     with timed("ml", self._handle_latency):

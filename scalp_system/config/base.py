@@ -195,10 +195,16 @@ class StorageConfig:
     cache_flush_min_seconds: float = 1.0
     cache_flush_max_seconds: float = 5.0
     cache_target_buffer: int = 50
+    orderbooks_path: Path = Path("orderbooks.db")
+    trades_path: Path = Path("trades")
+    candles_path: Path = Path("candles")
+    features_path: Path = Path("features")
+    parquet_compression: str = "snappy"
 
     def ensure(self) -> None:
         if not isinstance(self.base_path, Path):
-            self.base_path = Path(self.base_path).expanduser()
+            self.base_path = Path(self.base_path)
+        self.base_path = self.base_path.expanduser()
         self.base_path.mkdir(parents=True, exist_ok=True)
         if self.cache_flush_min_seconds <= 0:
             self.cache_flush_min_seconds = 1.0
@@ -206,6 +212,20 @@ class StorageConfig:
             self.cache_flush_max_seconds = self.cache_flush_min_seconds
         if self.cache_target_buffer <= 0:
             self.cache_target_buffer = 1
+        self.orderbooks_path = self._resolve_path(self.orderbooks_path, is_directory=False)
+        self.trades_path = self._resolve_path(self.trades_path, is_directory=True)
+        self.candles_path = self._resolve_path(self.candles_path, is_directory=True)
+        self.features_path = self._resolve_path(self.features_path, is_directory=True)
+        self.parquet_compression = str(self.parquet_compression or "snappy").lower()
+
+    def _resolve_path(self, value: Path | str, *, is_directory: bool) -> Path:
+        path = value if isinstance(value, Path) else Path(value)
+        if not path.is_absolute():
+            path = self.base_path / path
+        path = path.expanduser()
+        target = path if is_directory else path.parent
+        target.mkdir(parents=True, exist_ok=True)
+        return path
 
 
 @dataclass
