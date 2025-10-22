@@ -193,6 +193,8 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
     config.dashboard.headless = False
     config.dashboard.title = "Proc UI"
     config.dashboard.repository_path = tmp_path / "runtime" / "signals.db"
+    config.bus.enabled = True
+    config.bus.port = _get_free_port()
 
     monkeypatch.setenv("DISPLAY", ":0")
 
@@ -245,7 +247,12 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
     )
 
     orchestrator = Orchestrator(config, config_path=tmp_path / "config.yaml")
-    orchestrator._start_dashboard_if_needed()
+    orchestrator._start_event_bus_if_needed()
+    try:
+        orchestrator._start_dashboard_if_needed()
+        active_bus_port = orchestrator._event_bus.port  # type: ignore[attr-defined]
+    finally:
+        orchestrator._stop_event_bus()
 
     assert captured["args"][0] == sys.executable
     assert "scalp_system.cli.dashboard" in captured["args"]
@@ -254,6 +261,12 @@ def test_orchestrator_launches_dashboard_process(monkeypatch, tmp_path):
     idx = captured["args"].index("--status-endpoint")
     assert captured["args"][idx + 1] == "http://127.0.0.1:5000/status"
     assert status_calls["start_count"] == 1
+    assert "--bus-host" in captured["args"]
+    host_idx = captured["args"].index("--bus-host")
+    assert captured["args"][host_idx + 1] == config.bus.host
+    assert "--bus-port" in captured["args"]
+    port_idx = captured["args"].index("--bus-port")
+    assert captured["args"][port_idx + 1] == str(active_bus_port)
 
 
 def test_orchestrator_skips_dashboard_when_no_display(monkeypatch, tmp_path, caplog):
@@ -278,7 +291,7 @@ def test_orchestrator_skips_dashboard_when_no_display(monkeypatch, tmp_path, cap
 
     assert "Display not detected" in caplog.text
 
-def test_cli_dashboard_omits_bus_when_unavailable(monkeypatch, tmp_path):
+def test_cli_dashboard_provides_bus_address_even_when_unavailable(monkeypatch, tmp_path):
     config = _build_config(tmp_path)
     config.bus.enabled = True
 
@@ -302,7 +315,7 @@ def test_cli_dashboard_omits_bus_when_unavailable(monkeypatch, tmp_path):
 
     dashboard_cli.main(["--repository", str(tmp_path / "signals.db"), "--config", "dummy.yaml"])
 
-    assert captured["bus_address"] is None
+    assert captured["bus_address"] == (config.bus.host, config.bus.port)
     assert callable(captured["token_writer"])
     assert callable(captured["token_status_provider"])
 
