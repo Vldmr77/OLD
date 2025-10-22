@@ -27,75 +27,72 @@ datafeed:
   use_sandbox: true
   allow_tokenless: true
   instruments:
-    - BBG004730ZJ9
-    - BBG004731032
-    - BBG004730N88
-    - FIGI0004
-    - FIGI0005
-    - FIGI0006
-    - FIGI0007
-    - FIGI0008
-    - FIGI0009
-    - FIGI0010
-    - FIGI0011
-    - FIGI0012
-    - FIGI0013
-    - FIGI0014
-    - FIGI0015
+    - BBG004730N88   # SBER
+    - BBG004731032   # SBERP
+    - BBG004730RP0   # GAZP
+    - BBG0047315D0   # LKOH
+    - BBG004731371   # GMKN
+    - BBG004731354   # ROSN
+    - BBG004731489   # NVTK
+    - BBG004730ZJ9   # TATN
+    - BBG004S68507   # MGNT
+    - BBG004S680K0   # MTSS
+    - BBG004S68157   # AFLT
+    - BBG004S686W0   # ALRS
+    - BBG004S683W7   # SNGS
+    - BBG004S683X6   # SNGSP
+    - BBG004S68696   # CHMF
+    - BBG004S686K0   # NLMK
+    - BBG00QPYJ5H0   # MOEX
+    - BBG00QPYJ639   # TCSG
+    - BBG006L8G4H1   # YNDX
+    - BBG00F3NC364   # FIVE
   monitored_instruments:
-    - FIGI0016
-    - FIGI0017
-    - FIGI0018
-    - FIGI0019
-    - FIGI0020
-    - FIGI0021
-    - FIGI0022
-    - FIGI0023
-    - FIGI0024
-    - FIGI0025
-    - FIGI0026
-    - FIGI0027
-    - FIGI0028
-    - FIGI0029
-    - FIGI0030
-    - FIGI0031
-    - FIGI0032
-    - FIGI0033
-    - FIGI0034
-    - FIGI0035
-    - FIGI0036
-    - FIGI0037
-    - FIGI0038
-    - FIGI0039
-    - FIGI0040
-    - FIGI0041
-    - FIGI0042
-    - FIGI0043
-    - FIGI0044
-    - FIGI0045
+    - FUTSI1224000   # USD/RUB futures
+    - FUTRI1224000   # RTS Index futures
+    - FUTBR1224000   # Brent futures
+    - FUTGAZP1224000 # Gazprom futures
+    - FUTSBRF1224000 # Sberbank futures
+    - FUTLKOH1224000 # Lukoil futures
+    - FUTGMKN1224000 # Norilsk Nickel futures
+    - FUTROSN1224000 # Rosneft futures
+    - FUTNVTK1224000 # Novatek futures
+    - FUTPLZL1224000 # Polyus futures
   max_active_instruments: 15
   monitor_pool_size: 30
   trade_history_size: 200
   candle_history_size: 240
   instrument_classes:
-    BBG004730ZJ9: equity
-    BBG004731032: equity
     BBG004730N88: equity
-    FIGI0004: equity
-    FIGI0005: equity
-    FIGI0006: equity
-    FIGI0007: equity
-    FIGI0008: equity
-    FIGI0009: equity
-    FIGI0010: equity
-    FIGI0011: equity
-    FIGI0012: equity
-    FIGI0013: equity
-    FIGI0014: equity
-    FIGI0015: equity
-    FIGI0016: futures
-    FIGI0017: futures
-    FIGI0018: futures
+    BBG004731032: equity
+    BBG004730RP0: equity
+    BBG0047315D0: equity
+    BBG004731371: equity
+    BBG004731354: equity
+    BBG004731489: equity
+    BBG004730ZJ9: equity
+    BBG004S68507: equity
+    BBG004S680K0: equity
+    BBG004S68157: equity
+    BBG004S686W0: equity
+    BBG004S683W7: equity
+    BBG004S683X6: equity
+    BBG004S68696: equity
+    BBG004S686K0: equity
+    BBG00QPYJ5H0: equity
+    BBG00QPYJ639: equity
+    BBG006L8G4H1: equity
+    BBG00F3NC364: equity
+    FUTSI1224000: futures
+    FUTRI1224000: futures
+    FUTBR1224000: futures
+    FUTGAZP1224000: futures
+    FUTSBRF1224000: futures
+    FUTLKOH1224000: futures
+    FUTGMKN1224000: futures
+    FUTROSN1224000: futures
+    FUTNVTK1224000: futures
+    FUTPLZL1224000: futures
   depth: 10
   current_cache_ttl: 60
   current_cache_size: 50
