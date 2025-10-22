@@ -74,6 +74,7 @@ class DashboardUI:
         sandbox_forward_callback: Optional[Callable[[], tuple[bool, str]]] = None,
         backtest_callback: Optional[Callable[[], tuple[bool, str]]] = None,
         training_callback: Optional[Callable[[], tuple[bool, str]]] = None,
+        bus_address: Optional[tuple[str, int]] = None,
     ) -> None:
         self._repository = repository
         self._status_provider = status_provider
@@ -86,6 +87,7 @@ class DashboardUI:
         self._status_error: Optional[str] = None
         self._root = None
         self._config_path = Path(config_path).expanduser() if config_path else None
+        self._bus_address = bus_address
         if token_status_provider is None and self._config_path is not None:
             token_status_provider = lambda: token_status(self._config_path)
         self._token_status_provider = token_status_provider
@@ -110,6 +112,11 @@ class DashboardUI:
         self._replacement_entry = None
         self._active_listbox = None
         self._monitored_listbox = None
+        self._restart_button = None
+        self._sandbox_button = None
+        self._backtest_button = None
+        self._training_button = None
+        self._replace_button = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -304,12 +311,14 @@ class DashboardUI:
         )
         self._bind_copy_paste(self._replacement_entry)
 
-        replace_button = ttk.Button(
+        self._replace_button = ttk.Button(
             instruments_frame,
             text="Replace instrument",
             command=self._apply_instrument_change,
         )
-        replace_button.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(8, 0))
+        if self._instrument_replace_callback is None:
+            self._replace_button.state(["disabled"])
+        self._replace_button.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(8, 0))
 
         lists_frame = ttk.Frame(
             instruments_frame, style="Dashboard.TFrame"
@@ -409,35 +418,46 @@ class DashboardUI:
         )
         apply_button.pack(anchor="e", pady=(6, 4))
 
-        restart_button = ttk.Button(
+        self._restart_button = ttk.Button(
             button_frame,
             text="Restart system",
             command=self._restart_system,
         )
         if self._restart_callback is None:
-            restart_button.state(["disabled"])
-        restart_button.pack(anchor="e")
+            self._restart_button.state(["disabled"])
+        self._restart_button.pack(anchor="e")
 
         control_button_frame = ttk.Frame(
             token_frame, style="Dashboard.TFrame"
         )  # type: ignore[arg-type]
         control_button_frame.grid(row=0, column=4, rowspan=3, sticky="e")
 
-        ttk.Button(
+        self._sandbox_button = ttk.Button(
             control_button_frame,
             text="Sandbox forward",
             command=self._launch_sandbox_forward,
-        ).pack(anchor="e", pady=(6, 4))
-        ttk.Button(
+        )
+        if self._sandbox_forward_callback is None:
+            self._sandbox_button.state(["disabled"])
+        self._sandbox_button.pack(anchor="e", pady=(6, 4))
+
+        self._backtest_button = ttk.Button(
             control_button_frame,
             text="Run backtest",
             command=self._launch_backtest,
-        ).pack(anchor="e", pady=(0, 4))
-        ttk.Button(
+        )
+        if self._backtest_callback is None:
+            self._backtest_button.state(["disabled"])
+        self._backtest_button.pack(anchor="e", pady=(0, 4))
+
+        self._training_button = ttk.Button(
             control_button_frame,
             text="Train models",
             command=self._launch_training,
-        ).pack(anchor="e")
+        )
+        if self._training_callback is None:
+            self._training_button.state(["disabled"])
+        self._training_button.pack(anchor="e")
 
         self._token_feedback_label = ttk.Label(
             token_frame,
@@ -927,6 +947,7 @@ def run_dashboard(
     sandbox_forward_callback: Optional[Callable[[], tuple[bool, str]]] = None,
     backtest_callback: Optional[Callable[[], tuple[bool, str]]] = None,
     training_callback: Optional[Callable[[], tuple[bool, str]]] = None,
+    bus_address: Optional[tuple[str, int]] = None,
 ) -> Optional[threading.Thread]:
     """Launch the Tkinter dashboard.
 
@@ -951,6 +972,7 @@ def run_dashboard(
             sandbox_forward_callback=sandbox_forward_callback,
             backtest_callback=backtest_callback,
             training_callback=training_callback,
+            bus_address=bus_address,
         )
         ui.run()
 

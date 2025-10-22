@@ -20,7 +20,7 @@ from scalp_system.storage.repository import SQLiteRepository
 
 
 def _check_storage(config: OrchestratorConfig) -> str:
-    path = config.storage.base_path / "health_check.db"
+    path = config.storage.health_db
     repository = SQLiteRepository(path)
     repository.summary()
     return f"storage:{path}"

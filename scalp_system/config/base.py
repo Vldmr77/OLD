@@ -191,6 +191,8 @@ class ExecutionConfig:
 @dataclass
 class StorageConfig:
     base_path: Path = Path("./runtime")
+    signals_db: Path = Path("signals.db")
+    health_db: Path = Path("health_check.db")
     enable_zstd: bool = True
     cache_flush_min_seconds: float = 1.0
     cache_flush_max_seconds: float = 5.0
@@ -206,6 +208,8 @@ class StorageConfig:
             self.base_path = Path(self.base_path)
         self.base_path = self.base_path.expanduser()
         self.base_path.mkdir(parents=True, exist_ok=True)
+        self.signals_db = self._resolve_path(self.signals_db, is_directory=False)
+        self.health_db = self._resolve_path(self.health_db, is_directory=False)
         if self.cache_flush_min_seconds <= 0:
             self.cache_flush_min_seconds = 1.0
         if self.cache_flush_max_seconds < self.cache_flush_min_seconds:
@@ -221,6 +225,9 @@ class StorageConfig:
     def _resolve_path(self, value: Path | str, *, is_directory: bool) -> Path:
         path = value if isinstance(value, Path) else Path(value)
         if not path.is_absolute():
+            parts = list(path.parts)
+            if parts and parts[0] == self.base_path.name:
+                path = Path(*parts[1:]) if len(parts) > 1 else Path()
             path = self.base_path / path
         path = path.expanduser()
         target = path if is_directory else path.parent
@@ -263,6 +270,47 @@ class DashboardConfig:
             self.signal_limit = 25
         self.title = str(self.title or "Scalp System Dashboard")
         self.headless = bool(self.headless)
+
+
+@dataclass
+class BusConfig:
+    enabled: bool = True
+    host: str = "127.0.0.1"
+    port: int = 8787
+
+    def ensure(self) -> None:
+        self.enabled = bool(self.enabled)
+        self.host = str(self.host or "127.0.0.1")
+        try:
+            self.port = max(1, int(self.port))
+        except (TypeError, ValueError):
+            self.port = 8787
+
+
+@dataclass
+class TinkoffBrokerConfig:
+    tokens_file: Path = Path("tinkoff_tokens.json")
+
+    def ensure(self, base_path: Path) -> None:
+        if not isinstance(self.tokens_file, Path):
+            self.tokens_file = Path(self.tokens_file)
+        path = self.tokens_file
+        if not path.is_absolute():
+            parts = list(path.parts)
+            if parts and parts[0] == base_path.name:
+                path = Path(*parts[1:]) if len(parts) > 1 else Path()
+            path = base_path / path
+        path = path.expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.tokens_file = path
+
+
+@dataclass
+class BrokersConfig:
+    tinkoff: TinkoffBrokerConfig = field(default_factory=TinkoffBrokerConfig)
+
+    def ensure(self, base_path: Path) -> None:
+        self.tinkoff.ensure(base_path)
 
 
 @dataclass
@@ -518,6 +566,8 @@ class OrchestratorConfig:
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    bus: BusConfig = field(default_factory=BusConfig)
+    brokers: BrokersConfig = field(default_factory=BrokersConfig)
     monitoring: MonitoringConfig = field(default_factory=MonitoringConfig)
     security: SecurityConfig = field(default_factory=SecurityConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
@@ -536,7 +586,10 @@ class OrchestratorConfig:
 
     def __post_init__(self) -> None:
         self.storage.ensure()
+        self.bus.ensure()
+        self.brokers.ensure(self.storage.base_path)
         self.dashboard.ensure(default_base=self.storage.base_path)
+        self.dashboard.repository_path = self.storage.signals_db
         self.datafeed.ensure()
         self.ml.ensure()
         self.risk.ensure()
@@ -570,6 +623,9 @@ class OrchestratorConfig:
         session_data = _ensure_dict(data.get("session", {}))
         risk_schedule_data = _ensure_dict(data.get("risk_schedule", {}))
         dashboard_data = _ensure_dict(data.get("dashboard", {}))
+        bus_data = _ensure_dict(data.get("bus", {}))
+        brokers_data = _ensure_dict(data.get("brokers", {}))
+        tinkoff_data = _ensure_dict(brokers_data.get("tinkoff", {}))
         ml_data = _ensure_dict(data.get("ml", {}))
         weights_data = _ensure_dict(ml_data.get("weights", {}))
         class_weights_data = ml_data.get("class_weights", {})
@@ -597,6 +653,16 @@ class OrchestratorConfig:
             execution=ExecutionConfig(**_ensure_dict(data.get("execution", {}))),
             storage=StorageConfig(**_ensure_dict(data.get("storage", {}))),
             dashboard=DashboardConfig(**dashboard_data),
+            bus=BusConfig(**bus_data),
+            brokers=BrokersConfig(
+                tinkoff=TinkoffBrokerConfig(
+                    tokens_file=_to_path(
+                        tinkoff_data.get(
+                            "tokens_file", Path("./runtime/tinkoff_tokens.json")
+                        )
+                    )
+                )
+            ),
             monitoring=MonitoringConfig(
                 cpu_soft_limit=monitoring_data.get("cpu_soft_limit", 90.0),
                 memory_soft_limit=monitoring_data.get("memory_soft_limit", 90.0),
@@ -747,6 +813,9 @@ __all__ = [
     "ExecutionConfig",
     "StorageConfig",
     "DashboardConfig",
+    "BusConfig",
+    "BrokersConfig",
+    "TinkoffBrokerConfig",
     "MonitoringConfig",
     "NotificationConfig",
     "FallbackConfig",

@@ -1,6 +1,7 @@
 """Interactive helpers for ensuring API tokens exist before runtime."""
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from getpass import getpass
@@ -46,6 +47,13 @@ def ensure_tokens_present(config_path: Path | None) -> Path:
     security = data.get("security", {})
     key_manager = _build_key_manager(security, config_path=path)
 
+    tokens_path = _resolve_tokens_file(data, config_path=path)
+    if tokens_path is not None:
+        tokens_from_file = _load_tokens_file(tokens_path)
+        for key in ("sandbox_token", "production_token"):
+            if _token_missing(datafeed.get(key)) and tokens_from_file.get(key):
+                datafeed[key] = tokens_from_file[key]
+
     use_sandbox = bool(datafeed.get("use_sandbox", True))
     allow_tokenless = bool(datafeed.get("allow_tokenless", False))
     fields_to_check = []
@@ -88,6 +96,12 @@ def ensure_tokens_present(config_path: Path | None) -> Path:
 
     if updated:
         _dump_yaml(path, data)
+        if tokens_path is not None:
+            _write_tokens_file(
+                tokens_path,
+                sandbox=datafeed.get("sandbox_token"),
+                production=datafeed.get("production_token"),
+            )
 
     return path
 
@@ -100,6 +114,13 @@ def token_status(config_path: Path | None) -> Dict[str, bool]:
     datafeed = data.get("datafeed", {}) if isinstance(data, dict) else {}
     sandbox_present = not _token_missing(datafeed.get("sandbox_token"))
     production_present = not _token_missing(datafeed.get("production_token"))
+    tokens_path = _resolve_tokens_file(data, config_path=path)
+    if tokens_path is not None:
+        tokens_from_file = _load_tokens_file(tokens_path)
+        if tokens_from_file.get("sandbox_token"):
+            sandbox_present = True
+        if tokens_from_file.get("production_token"):
+            production_present = True
     return {"sandbox": sandbox_present, "production": production_present}
 
 
@@ -124,6 +145,8 @@ def store_tokens(
     security = data.get("security", {})
     key_manager = _build_key_manager(security, config_path=path)
 
+    tokens_path = _resolve_tokens_file(data, config_path=path)
+
     updated = False
 
     def _apply(field: str, value: Optional[str]) -> None:
@@ -145,6 +168,12 @@ def store_tokens(
 
     if updated:
         _dump_yaml(path, data)
+    if tokens_path is not None:
+        _write_tokens_file(
+            tokens_path,
+            sandbox=datafeed.get("sandbox_token"),
+            production=datafeed.get("production_token"),
+        )
 
     return updated
 
@@ -171,6 +200,74 @@ def _load_yaml(path: Path) -> Dict[str, Any]:
 def _dump_yaml(path: Path, data: Dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8") as handle:
         yaml.safe_dump(data, handle, indent=2, sort_keys=False, allow_unicode=True)
+
+
+def _resolve_tokens_file(data: Dict[str, Any], *, config_path: Path) -> Optional[Path]:
+    brokers = data.get("brokers")
+    if not isinstance(brokers, dict):
+        return None
+    tinkoff = brokers.get("tinkoff")
+    if not isinstance(tinkoff, dict):
+        return None
+    raw_path = tinkoff.get("tokens_file")
+    if not raw_path:
+        return None
+    storage = data.get("storage") if isinstance(data.get("storage"), dict) else {}
+    return _resolve_tokens_path(
+        raw_path, storage=storage, config_dir=config_path.parent, prefer_existing=False
+    )
+
+
+def _resolve_tokens_path(
+    raw_path: object, *, storage: Any, config_dir: Path, prefer_existing: bool
+) -> Path:
+    path = Path(str(raw_path)).expanduser()
+    if path.is_absolute():
+        return path
+    base = Path.cwd()
+    if isinstance(storage, dict):
+        base_path_raw = storage.get("base_path")
+        if base_path_raw:
+            base_candidate = Path(str(base_path_raw)).expanduser()
+            if not base_candidate.is_absolute():
+                base_candidate = (Path.cwd() / base_candidate).resolve()
+            base = base_candidate
+    parts = list(path.parts)
+    if parts and parts[0] == base.name:
+        path = Path(*parts[1:]) if len(parts) > 1 else Path()
+    resolved = (base / path).resolve()
+    if not prefer_existing or resolved.exists():
+        return resolved
+    fallback_parts = list(path.parts)
+    if fallback_parts and fallback_parts[0] == config_dir.name:
+        path = Path(*fallback_parts[1:]) if len(fallback_parts) > 1 else Path()
+    return (config_dir / path).resolve()
+
+
+def _load_tokens_file(path: Path) -> Dict[str, str]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle) or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): str(v) for k, v in data.items() if isinstance(v, str) and v}
+
+
+def _write_tokens_file(
+    path: Path, *, sandbox: Optional[str], production: Optional[str]
+) -> None:
+    payload: Dict[str, Optional[str]] = {}
+    if sandbox:
+        payload["sandbox_token"] = sandbox
+    if production:
+        payload["production_token"] = production
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, ensure_ascii=False)
 
 
 def _build_key_manager(security_section: Any, *, config_path: Path) -> Optional[KeyManager]:

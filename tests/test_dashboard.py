@@ -83,6 +83,7 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
         sandbox_forward_callback=None,
         backtest_callback=None,
         training_callback=None,
+        bus_address=None,
     ):
         calls.update(
             {
@@ -101,6 +102,7 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
                 "sandbox_forward_callback": sandbox_forward_callback,
                 "backtest_callback": backtest_callback,
                 "training_callback": training_callback,
+                "bus_address": bus_address,
             }
         )
 
@@ -128,6 +130,7 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
     assert callable(calls["sandbox_forward_callback"])
     assert callable(calls["backtest_callback"])
     assert callable(calls["training_callback"])
+    assert calls["bus_address"] is None
 
 
 def test_replace_instrument_updates_data_engine(tmp_path):

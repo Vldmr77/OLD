@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.example.yaml"
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config.yaml"
 
 from .loader import load_config  # noqa: E402  # circular-safe import
 

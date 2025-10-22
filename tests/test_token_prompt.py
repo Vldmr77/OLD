@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import json
+
 import pytest
 
 from scalp_system.config.token_prompt import (
@@ -118,3 +120,34 @@ def test_store_tokens_updates_and_reports_status(tmp_path):
 
     updated_again = store_tokens(config_path, sandbox=None, production=None)
     assert updated_again is False
+
+
+@pytest.mark.skipif(yaml is None, reason="PyYAML is required for token prompt tests")
+def test_tokens_file_is_written(tmp_path):
+    config_path = tmp_path / "config.yaml"
+    runtime_dir = tmp_path / "runtime"
+    tokens_file = runtime_dir / "tinkoff_tokens.json"
+    config_path.write_text(
+        f"""
+storage:
+  base_path: {runtime_dir}
+brokers:
+  tinkoff:
+    tokens_file: ./runtime/tinkoff_tokens.json
+datafeed:
+  sandbox_token: ""
+  production_token: ""
+  use_sandbox: true
+        """,
+        encoding="utf-8",
+    )
+
+    store_tokens(config_path, sandbox="AAA", production="BBB")
+
+    data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert data["datafeed"]["sandbox_token"] == "AAA"
+    assert data["datafeed"]["production_token"] == "BBB"
+
+    payload = json.loads(tokens_file.read_text(encoding="utf-8"))
+    assert payload["sandbox_token"] == "AAA"
+    assert payload["production_token"] == "BBB"

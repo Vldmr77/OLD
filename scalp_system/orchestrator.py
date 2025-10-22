@@ -20,6 +20,7 @@ from .broker.tinkoff import (
 from .config.base import OrchestratorConfig
 from .config.editor import set_operational_mode, update_instrument_lists
 from .config.loader import load_config
+from .control.bus import EventBus
 from .control.manual_override import ManualOverrideGuard
 from .control.session import SessionGuard
 from .data.engine import DataEngine
@@ -119,6 +120,7 @@ class Orchestrator:
             interval_seconds=config.monitoring.heartbeat_interval_seconds,
             miss_threshold=config.monitoring.heartbeat_miss_threshold,
         )
+        self._event_bus: Optional[EventBus] = None
         self._fallback = FallbackSignalGenerator(config.fallback)
         self._connectivity = ConnectivityFailover(config.connectivity)
         self._latency_monitor = LatencyMonitor(
@@ -1165,6 +1167,7 @@ class Orchestrator:
         self._restart_event = asyncio.Event()
         if self._pending_restart:
             self._restart_event.set()
+        self._start_event_bus_if_needed()
         self._start_dashboard_if_needed()
         await self._await_startup_window()
         interval = int(self._config.system.checkpoint_interval_seconds)
@@ -1424,6 +1427,7 @@ class Orchestrator:
             await self._process_latency_alerts()
             await self._persist_checkpoint()
             await self._performance_reporter.maybe_emit()
+            self._stop_event_bus()
         if self._restart_event and self._restart_event.is_set():
             raise RestartRequested()
 
@@ -1434,12 +1438,78 @@ class Orchestrator:
         self._ml_engine.reload_models(model_dir)
         self._risk_engine.notify_model_reload()
 
+    def _handle_bus_result(self, label: str, result: tuple[bool, str]) -> None:
+        success, message = result
+        log = LOGGER.info if success else LOGGER.warning
+        log("%s via control bus: %s", label, message)
+        detail = f"label={label};success={str(success).lower()};message={message}"
+        self._audit_logger.log("CONTROL", "BUS_EVENT", detail)
+
+    def _handle_bus_instrument_replace(self, payload: dict) -> None:
+        current = str(payload.get("current", "")).strip()
+        replacement = str(payload.get("replacement", "")).strip()
+        if not current or not replacement:
+            LOGGER.warning("Invalid instrument replacement payload: %s", payload)
+            return
+        result = self.replace_instrument(current, replacement)
+        self._handle_bus_result("instrument.replace", result)
+
+    def _start_event_bus_if_needed(self) -> None:
+        if self._event_bus is not None or not self._config.bus.enabled:
+            return
+        bus = EventBus(self._config.bus.host, self._config.bus.port)
+        bus.register("system.restart", lambda payload: self._handle_bus_restart())
+        bus.register(
+            "system.backtest",
+            lambda payload: self._handle_bus_result("backtest", self.trigger_backtest()),
+        )
+        bus.register(
+            "system.train",
+            lambda payload: self._handle_bus_result("training", self.trigger_training()),
+        )
+        bus.register(
+            "system.sandbox_forward",
+            lambda payload: self._handle_bus_result(
+                "sandbox_forward", self.start_sandbox_forward()
+            ),
+        )
+        bus.register("instrument.replace", self._handle_bus_instrument_replace)
+        try:
+            bus.start()
+        except OSError as exc:
+            LOGGER.error("Failed to start control bus: %s", exc)
+            self._audit_logger.log("CONTROL", "BUS_ERROR", f"error={exc}")
+            return
+        self._event_bus = bus
+        self._audit_logger.log(
+            "CONTROL",
+            "BUS_STARTED",
+            f"host={self._config.bus.host};port={bus.port}",
+        )
+
+    def _handle_bus_restart(self) -> None:
+        LOGGER.info("Restart requested via control bus")
+        self._audit_logger.log("CONTROL", "BUS_RESTART", "requested=true")
+        self.request_restart()
+
+    def _stop_event_bus(self) -> None:
+        if self._event_bus is None:
+            return
+        try:
+            self._event_bus.stop()
+        finally:
+            self._audit_logger.log("CONTROL", "BUS_STOPPED", "ok=true")
+            self._event_bus = None
+
     def _start_dashboard_if_needed(self) -> None:
         if self._dashboard_thread is not None:
             return
         if not self._config.dashboard.auto_start:
             return
         try:
+            bus_address = None
+            if self._event_bus is not None:
+                bus_address = (self._config.bus.host, self._event_bus.port)
             thread = run_dashboard(
                 self._config.dashboard.repository_path,
                 status_provider=self.dashboard_status,
@@ -1454,6 +1524,7 @@ class Orchestrator:
                 sandbox_forward_callback=self.start_sandbox_forward,
                 backtest_callback=self.trigger_backtest,
                 training_callback=self.trigger_training,
+                bus_address=bus_address,
             )
         except OSError as exc:
             LOGGER.error(
