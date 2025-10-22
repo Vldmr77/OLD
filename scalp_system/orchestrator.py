@@ -1473,6 +1473,12 @@ class Orchestrator:
                 "sandbox_forward", self.start_sandbox_forward()
             ),
         )
+        bus.register(
+            "system.forwardtest",
+            lambda payload: self._handle_bus_result(
+                "forwardtest", self.start_sandbox_forward()
+            ),
+        )
         bus.register("instrument.replace", self._handle_bus_instrument_replace)
         try:
             bus.start()

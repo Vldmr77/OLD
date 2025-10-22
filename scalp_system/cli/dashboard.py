@@ -78,20 +78,23 @@ def main(argv: list[str] | None = None) -> None:
         def _emit(event: Event, *, label: str, success: str) -> tuple[bool, str]:
             try:
                 bus_client.emit_event(event)
-            except OSError as exc:
-                LOGGER.error("Failed to emit %s via bus: %s", label, exc)
+            except Exception as exc:  # pragma: no cover - defensive guard
+                LOGGER.exception("Failed to emit %s via bus", label)
                 return False, f"{label} failed: {exc}"
             return True, success
 
-        def _restart() -> None:
-            ok, message = _emit(Event("system.restart"), label="restart", success="Restart requested")
+        def _restart() -> tuple[bool, str]:
+            ok, message = _emit(
+                Event("system.restart"), label="restart", success="Restart requested"
+            )
             if not ok:
                 LOGGER.warning(message)
+            return ok, message
 
         restart_callback = _restart
         sandbox_callback = lambda: _emit(
-            Event("system.sandbox_forward"),
-            label="sandbox_forward",
+            Event("system.forwardtest"),
+            label="forwardtest",
             success="Sandbox forward requested",
         )
         backtest_callback = lambda: _emit(

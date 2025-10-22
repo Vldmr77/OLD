@@ -65,7 +65,7 @@ class DashboardUI:
         headless: bool = False,
         title: str = "Scalp System Dashboard",
         config_path: Optional[Path] = None,
-        restart_callback: Optional[Callable[[], None]] = None,
+        restart_callback: Optional[Callable[[], tuple[bool, str] | None]] = None,
         token_status_provider: Optional[Callable[[], dict[str, bool]]] = None,
         token_writer: Optional[Callable[[Optional[str], Optional[str]], bool]] = None,
         instrument_replace_callback: Optional[
@@ -888,12 +888,17 @@ class DashboardUI:
             self._set_feedback("Restart is unavailable in this mode.", "#facc15")
             return
         try:
-            self._restart_callback()
+            result = self._restart_callback()
         except Exception as exc:  # pragma: no cover - defensive guard
             LOGGER.exception("Failed to request orchestrator restart: %s", exc)
             self._set_feedback(f"Failed to request restart: {exc}", "#f87171")
             return
-        self._set_feedback("Restart requested.", "#22c55e")
+        if isinstance(result, tuple) and len(result) == 2:
+            success, message = result
+            colour = "#22c55e" if success else "#f87171"
+            self._set_feedback(message, colour)
+        else:
+            self._set_feedback("Restart requested.", "#22c55e")
 
     def _set_feedback(self, message: str, colour: str = "#e2e8f0") -> None:
         if self._token_feedback_label is None:
@@ -938,7 +943,7 @@ def run_dashboard(
     headless: bool = False,
     title: str = "Scalp System Dashboard",
     config_path: Optional[Path] = None,
-    restart_callback: Optional[Callable[[], None]] = None,
+    restart_callback: Optional[Callable[[], tuple[bool, str] | None]] = None,
     token_status_provider: Optional[Callable[[], dict[str, bool]]] = None,
     token_writer: Optional[Callable[[Optional[str], Optional[str]], bool]] = None,
     instrument_replace_callback: Optional[
