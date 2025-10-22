@@ -5,10 +5,11 @@ import asyncio
 import logging
 import os
 from collections import deque
+from concurrent.futures import Future, TimeoutError as FutureTimeout
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from threading import Thread
+from threading import Lock, Thread
 from typing import Callable, Deque, Optional
 
 from .broker.tinkoff import (
@@ -17,6 +18,7 @@ from .broker.tinkoff import (
     ensure_sdk_available,
 )
 from .config.base import OrchestratorConfig
+from .config.editor import set_operational_mode, update_instrument_lists
 from .config.loader import load_config
 from .control.manual_override import ManualOverrideGuard
 from .control.session import SessionGuard
@@ -47,6 +49,7 @@ from .storage.repository import SQLiteRepository
 from .utils.integrity import check_data_integrity
 from .utils.timing import timed
 from .config.token_prompt import is_placeholder_token
+from .simulation.backtest import BacktestEngine
 from .ui import DashboardStatus, ModuleStatus, run_dashboard
 
 LOGGER = logging.getLogger(__name__)
@@ -179,6 +182,9 @@ class Orchestrator:
         self._risk_tasks: list[asyncio.Task] = []
         self._risk_task_labels: dict[asyncio.Task, str] = {}
         self._dashboard_thread: Optional[Thread] = None
+        self._operation_lock = Lock()
+        self._active_backtests = 0
+        self._active_manual_training = 0
 
     def _resolve_api_token(self) -> Optional[str]:
         token = (
@@ -266,6 +272,40 @@ class Orchestrator:
         alert = self._latency_monitor.observe(stage, latency_ms)
         if alert:
             self._latency_events.append(alert)
+
+    def _change_operation_count(self, attr: str, delta: int) -> None:
+        with self._operation_lock:
+            current = getattr(self, attr, 0)
+            current += delta
+            if current < 0:
+                current = 0
+            setattr(self, attr, current)
+
+    def _invoke_threadsafe(
+        self,
+        func: Callable[[], tuple[bool, str]],
+        *,
+        timeout: float = 5.0,
+    ) -> tuple[bool, str]:
+        loop = self._loop
+        if loop and loop.is_running():
+            future: Future[tuple[bool, str]] = Future()
+
+            def _run() -> None:
+                try:
+                    result = func()
+                except Exception as exc:  # pragma: no cover - defensive guard
+                    LOGGER.exception("Dashboard operation failed: %s", exc)
+                    future.set_result((False, f"Operation failed: {exc}"))
+                else:
+                    future.set_result(result)
+
+            loop.call_soon_threadsafe(_run)
+            try:
+                return future.result(timeout)
+            except FutureTimeout:
+                return False, "Timed out waiting for orchestrator loop."
+        return func()
 
     def dashboard_status(self) -> DashboardStatus:
         data_snapshot = self._data_engine.snapshot()
@@ -525,13 +565,193 @@ class Orchestrator:
         processes.append(
             f"Performance reporter: {'enabled' if self._config.reporting.enabled else 'disabled'}"
         )
+        if self._active_manual_training:
+            processes.append(
+                f"Manual training: running x{self._active_manual_training}"
+            )
+        if self._active_backtests:
+            processes.append(
+                f"Manual backtest: running x{self._active_backtests}"
+            )
 
         return DashboardStatus(
             modules=modules,
             processes=processes,
             errors=errors,
             ensemble=self._ml_engine.ensemble_overview(),
+            instruments={
+                "active": list(self._data_engine.active_instruments()),
+                "monitored": list(self._data_engine.monitored_instruments()),
+            },
         )
+
+    def replace_instrument(self, current: str, replacement: str) -> tuple[bool, str]:
+        current_clean = (current or "").strip()
+        replacement_clean = (replacement or "").strip()
+
+        def _apply() -> tuple[bool, str]:
+            if not current_clean:
+                return False, "Select an instrument to replace."
+            if not replacement_clean:
+                return False, "Enter a replacement instrument."
+            active = list(self._data_engine.active_instruments())
+            if current_clean not in active:
+                return False, f"{current_clean} is not active."
+            if replacement_clean in active:
+                return False, f"{replacement_clean} already active."
+            updated_active = [
+                replacement_clean if figi == current_clean else figi for figi in active
+            ]
+            self._data_engine.update_active_instruments(updated_active)
+            monitored = list(self._data_engine.monitored_instruments())
+            if replacement_clean not in monitored:
+                monitored.insert(0, replacement_clean)
+                self._data_engine.update_monitored_pool(monitored)
+                monitored = list(self._data_engine.monitored_instruments())
+            self._config.datafeed.instruments = updated_active
+            self._config.datafeed.monitored_instruments = monitored
+            self._audit_logger.log(
+                "DATA",
+                "INSTRUMENT_REPLACED",
+                f"from={current_clean};to={replacement_clean}",
+            )
+            if self._config_path:
+                try:
+                    update_instrument_lists(
+                        self._config_path,
+                        active=updated_active,
+                        monitored=monitored,
+                    )
+                except Exception as exc:  # pragma: no cover - file system guard
+                    LOGGER.warning("Failed to persist instrument update: %s", exc)
+            return True, f"Replaced {current_clean} with {replacement_clean}."
+
+        return self._invoke_threadsafe(_apply)
+
+    def start_sandbox_forward(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            if self._config_path:
+                try:
+                    set_operational_mode(
+                        self._config_path,
+                        mode="forward-test",
+                        use_sandbox=True,
+                    )
+                except Exception as exc:  # pragma: no cover - file system guard
+                    LOGGER.exception("Failed to update configuration for sandbox mode: %s", exc)
+                    return False, f"Failed to update configuration: {exc}"
+            self._config.system.mode = "forward-test"
+            self._config.datafeed.use_sandbox = True
+            self._audit_logger.log(
+                "CONTROL", "SANDBOX_FORWARD", "mode=forward-test;use_sandbox=true"
+            )
+            self.request_restart()
+            return True, "Sandbox forward scheduled; restarting."
+
+        return self._invoke_threadsafe(_apply)
+
+    def trigger_backtest(self) -> tuple[bool, str]:
+        loop = self._loop
+
+        def _schedule_on_loop() -> None:
+            self._change_operation_count("_active_backtests", 1)
+
+            async def _run() -> None:
+                try:
+                    await self._run_backtest_once()
+                finally:
+                    self._change_operation_count("_active_backtests", -1)
+
+            asyncio.create_task(_run())
+
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(_schedule_on_loop)
+            return True, "Backtest started in background."
+
+        self._change_operation_count("_active_backtests", 1)
+
+        def _thread_target() -> None:
+            try:
+                asyncio.run(self._run_backtest_once())
+            finally:
+                self._change_operation_count("_active_backtests", -1)
+
+        Thread(target=_thread_target, daemon=True).start()
+        return True, "Backtest started in background."
+
+    def trigger_training(self) -> tuple[bool, str]:
+        loop = self._loop
+
+        def _schedule_on_loop() -> None:
+            self._change_operation_count("_active_manual_training", 1)
+
+            async def _run() -> None:
+                try:
+                    await self._perform_training()
+                finally:
+                    self._change_operation_count("_active_manual_training", -1)
+
+            asyncio.create_task(_run())
+
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(_schedule_on_loop)
+            return True, "Training started in background."
+
+        self._change_operation_count("_active_manual_training", 1)
+
+        def _thread_target() -> None:
+            try:
+                asyncio.run(self._perform_training())
+            finally:
+                self._change_operation_count("_active_manual_training", -1)
+
+        Thread(target=_thread_target, daemon=True).start()
+        return True, "Training started in background."
+
+    async def _run_backtest_once(self) -> None:
+        engine = BacktestEngine(
+            self._config.backtest,
+            self._config.features,
+            self._config.ml,
+            self._config.risk,
+        )
+        try:
+            result = await asyncio.to_thread(engine.run)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.exception("Manual backtest failed: %s", exc)
+            self._audit_logger.log("BACKTEST", "FAILED", str(exc))
+            return
+        self._audit_logger.log(
+            "BACKTEST",
+            "COMPLETED",
+            (
+                f"trades={result.trades};pnl={result.pnl:.2f};"
+                f"win_rate={result.win_rate:.2%};max_dd={result.max_drawdown:.2f}"
+            ),
+        )
+
+    async def _perform_training(self) -> bool:
+        trainer = ModelTrainer(self._config.training)
+        try:
+            report = await asyncio.to_thread(trainer.train)
+        except Exception as exc:  # pragma: no cover - training guard
+            LOGGER.exception("Training run failed: %s", exc)
+            self._audit_logger.log("TRAINING", "FAILED", str(exc))
+            return False
+        self._ml_engine.update_weights(report.weights)
+        self._audit_logger.log(
+            "TRAINING",
+            "COMPLETED",
+            (
+                f"samples={report.samples};epochs={report.epochs};"
+                f"loss={report.training_loss:.4f};val={report.validation_loss:.4f}"
+            ),
+        )
+        try:
+            self.reload_models(report.model_dir)
+        except Exception as exc:  # pragma: no cover - reload guard
+            LOGGER.exception("Model reload after training failed: %s", exc)
+        return True
 
     def request_restart(self) -> None:
         """Signal that the orchestrator should restart after the current loop."""
@@ -654,26 +874,7 @@ class Orchestrator:
             if session_state.active:
                 LOGGER.info("Skipping scheduled training while session is active")
                 return
-        trainer = ModelTrainer(self._config.training)
-        try:
-            report = await asyncio.to_thread(trainer.train)
-        except Exception as exc:  # pragma: no cover - training failures
-            LOGGER.exception("Scheduled training failed: %s", exc)
-            self._audit_logger.log("TRAINING", "FAILED", str(exc))
-            return
-        self._ml_engine.update_weights(report.weights)
-        self._audit_logger.log(
-            "TRAINING",
-            "COMPLETED",
-            (
-                f"samples={report.samples};epochs={report.epochs};"
-                f"loss={report.training_loss:.4f};val={report.validation_loss:.4f}"
-            ),
-        )
-        try:
-            self.reload_models(report.model_dir)
-        except Exception as exc:  # pragma: no cover - reload issues
-            LOGGER.exception("Model reload after training failed: %s", exc)
+        await self._perform_training()
 
     def _start_risk_tasks(self) -> None:
         if self._risk_schedule.rotation_interval_seconds > 0:
@@ -1249,6 +1450,10 @@ class Orchestrator:
                 background=True,
                 config_path=self._config_path,
                 restart_callback=self.request_restart,
+                instrument_replace_callback=self.replace_instrument,
+                sandbox_forward_callback=self.start_sandbox_forward,
+                backtest_callback=self.trigger_backtest,
+                training_callback=self.trigger_training,
             )
         except OSError as exc:
             LOGGER.error(

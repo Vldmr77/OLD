@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from scalp_system.config.base import OrchestratorConfig
 from scalp_system.orchestrator import Orchestrator
@@ -18,6 +19,7 @@ def test_dashboard_refresh_headless(tmp_path):
         processes=["stream"],
         errors=["none"],
         ensemble={"base_weights": {"lstm_ob": 0.4}},
+        instruments={"active": ["AAA"], "monitored": ["AAA"]},
     )
 
     ui = DashboardUI(repository, status_provider=lambda: status, headless=True)
@@ -77,6 +79,10 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
         restart_callback=None,
         token_status_provider=None,
         token_writer=None,
+        instrument_replace_callback=None,
+        sandbox_forward_callback=None,
+        backtest_callback=None,
+        training_callback=None,
     ):
         calls.update(
             {
@@ -91,6 +97,10 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
                 "restart_callback": restart_callback,
                 "token_status_provider": token_status_provider,
                 "token_writer": token_writer,
+                "instrument_replace_callback": instrument_replace_callback,
+                "sandbox_forward_callback": sandbox_forward_callback,
+                "backtest_callback": backtest_callback,
+                "training_callback": training_callback,
             }
         )
 
@@ -114,6 +124,55 @@ def test_orchestrator_starts_dashboard_when_enabled(monkeypatch, tmp_path):
     assert callable(calls["restart_callback"])
     provider = calls["status_provider"]
     assert provider.__self__ is orchestrator  # bound method
+    assert callable(calls["instrument_replace_callback"])
+    assert callable(calls["sandbox_forward_callback"])
+    assert callable(calls["backtest_callback"])
+    assert callable(calls["training_callback"])
+
+
+def test_replace_instrument_updates_data_engine(tmp_path):
+    config = _build_config(tmp_path)
+    config.datafeed.instruments = ["AAA", "BBB"]
+    config.datafeed.monitored_instruments = ["AAA", "BBB", "CCC"]
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+datafeed:
+  instruments: [AAA, BBB]
+  monitored_instruments: [AAA, BBB, CCC]
+""".strip(),
+        encoding="utf-8",
+    )
+    orchestrator = Orchestrator(config, config_path=config_path)
+
+    success, message = orchestrator.replace_instrument("AAA", "ZZZ")
+
+    assert success
+    assert "ZZZ" in orchestrator._data_engine.active_instruments()
+    loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert "ZZZ" in loaded["datafeed"]["instruments"]
+
+
+def test_start_sandbox_forward_updates_config_and_flags(tmp_path):
+    config = _build_config(tmp_path)
+    config.datafeed.use_sandbox = False
+    config.system.mode = "forward-test"
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}", encoding="utf-8")
+
+    orchestrator = Orchestrator(config, config_path=config_path)
+    orchestrator._config.system.mode = "production"
+    orchestrator._config.datafeed.use_sandbox = False
+
+    success, message = orchestrator.start_sandbox_forward()
+
+    assert success
+    assert orchestrator._config.system.mode == "forward-test"
+    assert orchestrator._config.datafeed.use_sandbox is True
+    assert orchestrator._pending_restart is True
+    loaded = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert loaded["system"]["mode"] == "forward-test"
+    assert loaded["datafeed"]["use_sandbox"] is True
 
 
 def test_orchestrator_skips_dashboard_when_disabled(monkeypatch, tmp_path):

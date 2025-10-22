@@ -40,6 +40,7 @@ class DashboardStatus:
     processes: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     ensemble: dict[str, object] = field(default_factory=dict)
+    instruments: dict[str, list[str]] = field(default_factory=dict)
 
 
 @dataclass
@@ -67,6 +68,12 @@ class DashboardUI:
         restart_callback: Optional[Callable[[], None]] = None,
         token_status_provider: Optional[Callable[[], dict[str, bool]]] = None,
         token_writer: Optional[Callable[[Optional[str], Optional[str]], bool]] = None,
+        instrument_replace_callback: Optional[
+            Callable[[str, str], tuple[bool, str]]
+        ] = None,
+        sandbox_forward_callback: Optional[Callable[[], tuple[bool, str]]] = None,
+        backtest_callback: Optional[Callable[[], tuple[bool, str]]] = None,
+        training_callback: Optional[Callable[[], tuple[bool, str]]] = None,
     ) -> None:
         self._repository = repository
         self._status_provider = status_provider
@@ -91,10 +98,18 @@ class DashboardUI:
         self._module_badge_frame = None
         self._sandbox_entry = None
         self._production_entry = None
+        self._instrument_replace_callback = instrument_replace_callback
+        self._sandbox_forward_callback = sandbox_forward_callback
+        self._backtest_callback = backtest_callback
+        self._training_callback = training_callback
         self._sandbox_status_label = None
         self._production_status_label = None
         self._token_feedback_label = None
         self._token_status: dict[str, bool] = {"sandbox": False, "production": False}
+        self._active_combo = None
+        self._replacement_entry = None
+        self._active_listbox = None
+        self._monitored_listbox = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -259,6 +274,85 @@ class DashboardUI:
         )  # type: ignore[arg-type]
         self._module_badge_frame.pack(fill="x", pady=(0, 12))
 
+        instruments_frame = ttk.Frame(
+            container, style="Dashboard.TFrame"
+        )  # type: ignore[arg-type]
+        instruments_frame.pack(fill="x", pady=(0, 16))
+        instruments_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            instruments_frame,
+            text="Active instruments",
+            style="Dashboard.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        self._active_combo = ttk.Combobox(
+            instruments_frame,
+            state="readonly",
+            width=30,
+            values=[],
+        )
+        self._active_combo.grid(row=0, column=1, sticky="we", padx=(8, 8))
+
+        ttk.Label(
+            instruments_frame,
+            text="Replacement",
+            style="Dashboard.TLabel",
+        ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self._replacement_entry = ttk.Entry(instruments_frame)
+        self._replacement_entry.grid(
+            row=1, column=1, sticky="we", padx=(8, 8), pady=(6, 0)
+        )
+        self._bind_copy_paste(self._replacement_entry)
+
+        replace_button = ttk.Button(
+            instruments_frame,
+            text="Replace instrument",
+            command=self._apply_instrument_change,
+        )
+        replace_button.grid(row=0, column=2, rowspan=2, sticky="ns", padx=(8, 0))
+
+        lists_frame = ttk.Frame(
+            instruments_frame, style="Dashboard.TFrame"
+        )  # type: ignore[arg-type]
+        lists_frame.grid(row=0, column=3, rowspan=2, sticky="nsew", padx=(16, 0))
+        lists_frame.columnconfigure(0, weight=1)
+        lists_frame.columnconfigure(1, weight=1)
+
+        ttk.Label(
+            lists_frame,
+            text="Current",
+            style="Dashboard.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            lists_frame,
+            text="Monitoring pool",
+            style="Dashboard.TLabel",
+        ).grid(row=0, column=1, sticky="w")
+
+        self._active_listbox = tk.Listbox(
+            lists_frame,
+            height=5,
+            bg="#1e293b",
+            fg="#e2e8f0",
+            highlightthickness=0,
+            selectbackground="#2563eb",
+            selectforeground="#f8fafc",
+            activestyle="none",
+        )
+        self._active_listbox.grid(row=1, column=0, sticky="nsew", pady=(4, 0))
+
+        self._monitored_listbox = tk.Listbox(
+            lists_frame,
+            height=5,
+            bg="#1e293b",
+            fg="#e2e8f0",
+            highlightthickness=0,
+            selectbackground="#2563eb",
+            selectforeground="#f8fafc",
+            activestyle="none",
+        )
+        self._monitored_listbox.grid(row=1, column=1, sticky="nsew", pady=(4, 0))
+
         token_frame = ttk.Frame(
             container, style="Dashboard.TFrame"
         )  # type: ignore[arg-type]
@@ -323,6 +417,27 @@ class DashboardUI:
         if self._restart_callback is None:
             restart_button.state(["disabled"])
         restart_button.pack(anchor="e")
+
+        control_button_frame = ttk.Frame(
+            token_frame, style="Dashboard.TFrame"
+        )  # type: ignore[arg-type]
+        control_button_frame.grid(row=0, column=4, rowspan=3, sticky="e")
+
+        ttk.Button(
+            control_button_frame,
+            text="Sandbox forward",
+            command=self._launch_sandbox_forward,
+        ).pack(anchor="e", pady=(6, 4))
+        ttk.Button(
+            control_button_frame,
+            text="Run backtest",
+            command=self._launch_backtest,
+        ).pack(anchor="e", pady=(0, 4))
+        ttk.Button(
+            control_button_frame,
+            text="Train models",
+            command=self._launch_training,
+        ).pack(anchor="e")
 
         self._token_feedback_label = ttk.Label(
             token_frame,
@@ -582,6 +697,75 @@ class DashboardUI:
                 values=("info", " ".join(footer), ""),
             )
 
+    def _update_instruments(self, instruments: dict[str, list[str]]) -> None:
+        active = instruments.get("active", []) if instruments else []
+        monitored = instruments.get("monitored", []) if instruments else []
+        if self._active_combo is not None:
+            self._active_combo["values"] = tuple(active)
+            current = self._active_combo.get()
+            if current not in active and active:
+                self._active_combo.set(active[0])
+        if self._active_listbox is not None:
+            self._active_listbox.delete(0, tk.END)
+            for figi in active:
+                self._active_listbox.insert(tk.END, figi)
+        if self._monitored_listbox is not None:
+            self._monitored_listbox.delete(0, tk.END)
+            for figi in monitored:
+                self._monitored_listbox.insert(tk.END, figi)
+
+    def _apply_instrument_change(self) -> None:
+        if self._instrument_replace_callback is None:
+            self._set_feedback("Instrument replacement unavailable.", "#facc15")
+            return
+        if self._active_combo is None or self._replacement_entry is None:
+            self._set_feedback("Instrument widgets unavailable.", "#f87171")
+            return
+        current = self._active_combo.get().strip()
+        replacement = self._replacement_entry.get().strip()
+        if not current:
+            self._set_feedback("Select an instrument to replace.", "#facc15")
+            return
+        if not replacement:
+            self._set_feedback("Enter a replacement instrument.", "#facc15")
+            return
+        try:
+            success, message = self._instrument_replace_callback(current, replacement)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.exception("Instrument replacement callback failed: %s", exc)
+            self._set_feedback(f"Replacement failed: {exc}", "#f87171")
+            return
+        colour = "#22c55e" if success else "#f87171"
+        self._set_feedback(message, colour)
+        if success:
+            self._replacement_entry.delete(0, tk.END)
+
+    def _launch_sandbox_forward(self) -> None:
+        self._invoke_operation(self._sandbox_forward_callback, "Sandbox forward")
+
+    def _launch_backtest(self) -> None:
+        self._invoke_operation(self._backtest_callback, "Backtest")
+
+    def _launch_training(self) -> None:
+        self._invoke_operation(self._training_callback, "Training")
+
+    def _invoke_operation(
+        self,
+        callback: Optional[Callable[[], tuple[bool, str]]],
+        label: str,
+    ) -> None:
+        if callback is None:
+            self._set_feedback(f"{label} not available.", "#facc15")
+            return
+        try:
+            success, message = callback()
+        except Exception as exc:  # pragma: no cover - defensive guard
+            LOGGER.exception("%s callback failed: %s", label, exc)
+            self._set_feedback(f"{label} failed: {exc}", "#f87171")
+            return
+        colour = "#22c55e" if success else "#f87171"
+        self._set_feedback(message, colour)
+
     def _format_timestamp(self, value) -> str:
         if isinstance(value, datetime):
             return value.isoformat()
@@ -719,9 +903,9 @@ class DashboardUI:
             return "break"
 
         for sequence in ("<Control-c>", "<Control-C>", "<Command-c>", "<Command-C>"):
-            widget.bind(sequence, _copy)
+            widget.bind(sequence, _copy, add=True)
         for sequence in ("<Control-v>", "<Control-V>", "<Command-v>", "<Command-V>"):
-            widget.bind(sequence, _paste)
+            widget.bind(sequence, _paste, add=True)
 
 
 def run_dashboard(
@@ -737,6 +921,12 @@ def run_dashboard(
     restart_callback: Optional[Callable[[], None]] = None,
     token_status_provider: Optional[Callable[[], dict[str, bool]]] = None,
     token_writer: Optional[Callable[[Optional[str], Optional[str]], bool]] = None,
+    instrument_replace_callback: Optional[
+        Callable[[str, str], tuple[bool, str]]
+    ] = None,
+    sandbox_forward_callback: Optional[Callable[[], tuple[bool, str]]] = None,
+    backtest_callback: Optional[Callable[[], tuple[bool, str]]] = None,
+    training_callback: Optional[Callable[[], tuple[bool, str]]] = None,
 ) -> Optional[threading.Thread]:
     """Launch the Tkinter dashboard.
 
@@ -757,6 +947,10 @@ def run_dashboard(
             restart_callback=restart_callback,
             token_status_provider=token_status_provider,
             token_writer=token_writer,
+            instrument_replace_callback=instrument_replace_callback,
+            sandbox_forward_callback=sandbox_forward_callback,
+            backtest_callback=backtest_callback,
+            training_callback=training_callback,
         )
         ui.run()
 
