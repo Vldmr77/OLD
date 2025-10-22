@@ -24,24 +24,50 @@ class DashboardBusClient:
         *,
         timeout: float = 1.0,
         events_endpoint: str | None = None,
+        availability_ttl: float = 1.0,
     ) -> None:
         self._client = CoreBusClient(host, port, timeout=timeout)
         self._events_endpoint = events_endpoint
         self._stop_event = threading.Event()
         self._listener_thread: Optional[threading.Thread] = None
+        self._availability_lock = threading.Lock()
+        self._last_check: float = 0.0
+        self._last_result: bool = False
+        self._availability_ttl = max(0.1, availability_ttl)
 
     # ------------------------------------------------------------------
     # Bus availability
     # ------------------------------------------------------------------
     def is_up(self) -> bool:
-        return self._client.check_available()
+        now = time.monotonic()
+        with self._availability_lock:
+            if now - self._last_check <= self._availability_ttl:
+                return self._last_result
+        try:
+            result = self._client.check_available()
+        except OSError:
+            result = False
+        with self._availability_lock:
+            self._last_check = now
+            self._last_result = result
+        return result
 
     # ------------------------------------------------------------------
     # Command emission
     # ------------------------------------------------------------------
     def emit(self, name: str, args: Optional[dict] = None) -> None:
         LOGGER.debug("Emitting dashboard command: %s", name)
-        self._client.emit_event(Event(type=name, payload=args or {}))
+        try:
+            self._client.emit_event(Event(type=name, payload=args or {}))
+        except OSError:
+            with self._availability_lock:
+                self._last_check = time.monotonic()
+                self._last_result = False
+            raise
+        else:
+            with self._availability_lock:
+                self._last_check = time.monotonic()
+                self._last_result = True
 
     # ------------------------------------------------------------------
     # Event subscription

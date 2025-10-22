@@ -1,10 +1,13 @@
 import socket
 from pathlib import Path
 
+import pytest
+
 from scalp_system.cli import dashboard as dashboard_cli
 from scalp_system.config.base import OrchestratorConfig
 from scalp_system.orchestrator import Orchestrator
 from scalp_system.ui import DashboardApp
+from scalp_system.ui.bus_client import DashboardBusClient
 
 
 def test_dashboard_refresh_headless():
@@ -211,3 +214,47 @@ def test_cli_dashboard_omits_bus_when_unavailable(monkeypatch, tmp_path):
     assert captured["bus_address"] is None
     assert callable(captured["token_writer"])
     assert callable(captured["token_status_provider"])
+
+
+def test_dashboard_bus_client_caches_bus_state(monkeypatch):
+    checks: dict[str, int] = {"count": 0}
+
+    class DummyCoreBus:
+        def __init__(self, *_, **__):
+            pass
+
+        def check_available(self) -> bool:
+            checks["count"] += 1
+            return True
+
+        def emit_event(self, event):  # pragma: no cover - behaviour mocked
+            return None
+
+    monkeypatch.setattr("scalp_system.ui.bus_client.CoreBusClient", DummyCoreBus)
+
+    client = DashboardBusClient("127.0.0.1", 9999, availability_ttl=10.0)
+
+    assert client.is_up() is True
+    assert client.is_up() is True  # cached result avoids extra socket checks
+    assert checks["count"] == 1
+
+
+def test_dashboard_bus_client_marks_bus_down_after_emit_failure(monkeypatch):
+    class DummyCoreBus:
+        def __init__(self, *_, **__):
+            pass
+
+        def check_available(self) -> bool:
+            raise AssertionError("check_available should not be called when cached")
+
+        def emit_event(self, event):  # pragma: no cover - behaviour mocked
+            raise OSError("bus offline")
+
+    monkeypatch.setattr("scalp_system.ui.bus_client.CoreBusClient", DummyCoreBus)
+
+    client = DashboardBusClient("127.0.0.1", 9999, availability_ttl=10.0)
+
+    with pytest.raises(OSError):
+        client.emit("system.restart")
+
+    assert client.is_up() is False
