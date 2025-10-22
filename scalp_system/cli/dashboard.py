@@ -7,7 +7,7 @@ from pathlib import Path
 
 from ..config import loader as config_loader
 from ..config.loader import load_config
-from ..control.bus import BusClient, Event
+from ..control.bus import BusClient
 from ..ui import run_dashboard
 
 LOGGER = logging.getLogger(__name__)
@@ -67,59 +67,6 @@ def main(argv: list[str] | None = None) -> None:
                 cfg.bus.port,
             )
 
-    restart_callback = None
-    instrument_callback = None
-    sandbox_callback = None
-    backtest_callback = None
-    training_callback = None
-
-    if bus_client is not None:
-
-        def _emit(event: Event, *, label: str, success: str) -> tuple[bool, str]:
-            try:
-                bus_client.emit_event(event)
-            except Exception as exc:  # pragma: no cover - defensive guard
-                LOGGER.exception("Failed to emit %s via bus", label)
-                return False, f"{label} failed: {exc}"
-            return True, success
-
-        def _restart() -> tuple[bool, str]:
-            ok, message = _emit(
-                Event("system.restart"), label="restart", success="Restart requested"
-            )
-            if not ok:
-                LOGGER.warning(message)
-            return ok, message
-
-        restart_callback = _restart
-        sandbox_callback = lambda: _emit(
-            Event("system.forwardtest"),
-            label="forwardtest",
-            success="Sandbox forward requested",
-        )
-        backtest_callback = lambda: _emit(
-            Event("system.backtest"),
-            label="backtest",
-            success="Backtest requested",
-        )
-        training_callback = lambda: _emit(
-            Event("system.train"),
-            label="training",
-            success="Training requested",
-        )
-
-        def _instrument(current: str, replacement: str) -> tuple[bool, str]:
-            return _emit(
-                Event(
-                    "instrument.replace",
-                    {"current": current, "replacement": replacement},
-                ),
-                label="instrument.replace",
-                success=f"Replacement requested: {current}→{replacement}",
-            )
-
-        instrument_callback = _instrument
-
     run_dashboard(
         args.repository,
         refresh_interval_ms=args.refresh_interval,
@@ -127,11 +74,6 @@ def main(argv: list[str] | None = None) -> None:
         title=args.title,
         headless=args.headless,
         config_path=config_path,
-        restart_callback=restart_callback,
-        instrument_replace_callback=instrument_callback,
-        sandbox_forward_callback=sandbox_callback,
-        backtest_callback=backtest_callback,
-        training_callback=training_callback,
         bus_address=(cfg.bus.host, cfg.bus.port)
         if bus_client is not None
         else None,

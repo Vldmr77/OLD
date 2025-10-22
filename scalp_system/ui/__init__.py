@@ -1,18 +1,6 @@
-"""UI helpers for monitoring the scalping system."""
+"""UI helpers for the scalping system dashboard."""
 from __future__ import annotations
 
-from .dashboard import (
-    DashboardSnapshot,
-    DashboardStatus,
-    DashboardUI,
-    ModuleStatus,
-    run_dashboard,
-)
+from .app import DashboardApp, ScreenContext, run_dashboard
 
-__all__ = [
-    "DashboardSnapshot",
-    "DashboardStatus",
-    "DashboardUI",
-    "ModuleStatus",
-    "run_dashboard",
-]
+__all__ = ["DashboardApp", "ScreenContext", "run_dashboard"]

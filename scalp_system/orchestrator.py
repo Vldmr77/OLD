@@ -51,7 +51,7 @@ from .utils.integrity import check_data_integrity
 from .utils.timing import timed
 from .config.token_prompt import is_placeholder_token
 from .simulation.backtest import BacktestEngine
-from .ui import DashboardStatus, ModuleStatus, run_dashboard
+from .ui import run_dashboard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -158,6 +158,7 @@ class Orchestrator:
         except ValueError:
             LOGGER.exception("Failed to load encryption key")
             self._key_manager = None
+        self._started_at = datetime.utcnow()
         self._api_token = self._resolve_api_token()
         self._rest_api: Optional[TinkoffAPI] = None
         if self._api_token:
@@ -309,283 +310,361 @@ class Orchestrator:
                 return False, "Timed out waiting for orchestrator loop."
         return func()
 
-    def dashboard_status(self) -> DashboardStatus:
+    def dashboard_status(self) -> dict:
         data_snapshot = self._data_engine.snapshot()
         active = data_snapshot.get("active_instruments", [])
         monitored = data_snapshot.get("monitored_instruments", [])
-        active_preview = ", ".join(active[:4])
+
+        modules: list[dict[str, str]] = []
+
+        def add_module(name: str, state: str, detail: str = "", *, severity: str = "normal", status: str = "running") -> None:
+            modules.append(
+                {
+                    "name": name,
+                    "state": state,
+                    "detail": detail,
+                    "severity": severity,
+                    "status": status,
+                }
+            )
+
+        active_preview = ", ".join(active[:4]) or "нет активных"
         if len(active) > 4:
             active_preview += f" … (+{len(active) - 4})"
-        elif not active_preview:
-            active_preview = "No active instruments"
-        modules: list[ModuleStatus] = [
-            ModuleStatus(
-                "Data engine",
-                f"{len(active)} active",
-                f"pool {len(monitored)}; {active_preview}",
-                "warning" if not active else "normal",
-                "running" if active else "inactive",
-            )
-        ]
 
-        stream_state = "LIVE" if self._api_token else "OFFLINE"
-        modules.append(
-            ModuleStatus(
-                "Market stream",
-                stream_state,
-                f"channel={self._connectivity.active_channel}",
-                "warning" if not self._api_token else "normal",
-                "running" if self._api_token else "inactive",
-            )
-        )
-
-        session_state = self._session_guard.evaluate()
-        session_detail = session_state.reason or "within window"
-        modules.append(
-            ModuleStatus(
-                "Session schedule",
-                "ACTIVE" if session_state.active else "PAUSED",
-                session_detail,
-                "warning" if not session_state.active else "normal",
-                "running" if session_state.active else "inactive",
-            )
-        )
-
-        manual_state = self._manual_override.status()
-        override_detail = manual_state.reason or "no flag"
-        if manual_state.expires_at:
-            override_detail += f";expires={manual_state.expires_at.isoformat()}"
-        modules.append(
-            ModuleStatus(
-                "Manual override",
-                "HALTED" if manual_state.halted else "CLEAR",
-                override_detail,
-                "error" if manual_state.halted else "normal",
-                "error" if manual_state.halted else "running",
-            )
-        )
-
-        resource_snapshot = self._resource_monitor.snapshot()
-        resource_severity = "normal"
-        if (
-            resource_snapshot.cpu_percent >= self._resource_monitor.cpu_threshold
-            or resource_snapshot.memory_percent >= self._resource_monitor.memory_threshold
-            or (
-                resource_snapshot.gpu_memory_percent is not None
-                and resource_snapshot.gpu_memory_percent
-                >= self._resource_monitor.gpu_threshold
-            )
-        ):
-            resource_severity = "warning"
-        gpu_repr = (
-            f"{resource_snapshot.gpu_memory_percent:.1f}%"
-            if resource_snapshot.gpu_memory_percent is not None
-            else "n/a"
-        )
-        modules.append(
-            ModuleStatus(
-                "Resources",
-                "PRESSURE" if resource_severity == "warning" else "OK",
-                f"cpu={resource_snapshot.cpu_percent:.1f}% mem={resource_snapshot.memory_percent:.1f}% gpu={gpu_repr}",
-                resource_severity,
-                "running",
-            )
-        )
-
-        modules.append(
-            ModuleStatus(
-                "Feature pipeline",
-                "READY",
-                (
-                    f"levels={self._config.features.lob_levels};"
-                    f"window={self._config.features.rolling_window}"
-                ),
-                status="running",
-            )
-        )
-
-        ml_device = self._ml_engine.device_mode.upper()
-        ml_severity = (
-            "warning"
-            if self._ml_engine.device_mode != "gpu"
-            or self._ml_engine.throttle_delay > 0
-            else "normal"
-        )
-        modules.append(
-            ModuleStatus(
-                "ML engine",
-                ml_device,
-                f"throttle={self._ml_engine.throttle_delay * 1000:.0f}ms",
-                ml_severity,
-                "running" if self._ml_engine.device_mode else "inactive",
-            )
-        )
-
-        fallback_state = "ENABLED" if self._config.fallback.enabled else "DISABLED"
-        fallback_detail = f"quota_remaining={self._fallback.remaining_allowance()}"
-        fallback_last = self._fallback.last_rejection
-        if fallback_last:
-            fallback_detail += f";last={fallback_last}"
-        modules.append(
-            ModuleStatus(
-                "Fallback signals",
-                fallback_state,
-                fallback_detail,
-                "warning" if not self._config.fallback.enabled else "normal",
-                "running" if self._config.fallback.enabled else "inactive",
-            )
-        )
-
-        risk_snapshot = self._risk_engine.snapshot()
-        risk_state = "HALTED" if risk_snapshot.get("halt_trading") else "OK"
-        risk_severity = "error" if risk_snapshot.get("halt_trading") else "normal"
-        if risk_snapshot.get("daily_loss_triggered") and risk_severity != "error":
-            risk_severity = "warning"
-        risk_detail = (
-            f"realized={risk_snapshot.get('realized_pnl', 0.0):.2f};"
-            f"orders={risk_snapshot.get('order_count', 0)}"
-        )
-        cooldown = risk_snapshot.get("loss_cooldown_until")
-        if cooldown:
-            risk_detail += f";cooldown_until={cooldown}"
-        modules.append(
-            ModuleStatus(
-                "Risk engine",
-                risk_state,
-                risk_detail,
-                risk_severity,
-                "error" if risk_state == "HALTED" else "running",
-            )
-        )
-
-        exec_severity = "warning" if self._execution_engine.paper else "normal"
-        exec_detail = "paper" if self._execution_engine.paper else "live"
-        modules.append(
-            ModuleStatus(
-                "Execution",
-                self._execution_engine.mode.upper(),
-                f"mode={exec_detail}",
-                exec_severity,
-                "running" if not self._execution_engine.paper else "inactive",
-            )
-        )
-
-        storage_detail = (
-            f"signals={self._config.dashboard.repository_path.name};"
-            f"history={self._config.storage.base_path}"
-        )
-        modules.append(
-            ModuleStatus("Storage", "READY", storage_detail, status="running")
+        add_module(
+            "Data engine",
+            "ready" if active else "paused",
+            f"активных={len(active)}; мониторинг={len(monitored)}; {active_preview}",
+            severity="warning" if not active else "normal",
+            status="running" if active else "paused",
         )
 
         connectivity = self._connectivity.snapshot()
-        modules.append(
-            ModuleStatus(
-                "Connectivity",
-                connectivity.get("active_channel", "n/a"),
-                (
-                    f"failures={connectivity.get('failure_count', 0)};"
-                    f"success_streak={connectivity.get('success_streak', 0)}"
-                ),
-                "warning" if connectivity.get("failure_count", 0) else "normal",
-                "running",
+        add_module(
+            "Bus",
+            "ready" if self._event_bus else "paused",
+            f"{self._config.bus.host}:{self._event_bus.port if self._event_bus else self._config.bus.port}",
+            severity="normal" if self._event_bus else "warning",
+            status="running" if self._event_bus else "paused",
+        )
+
+        stream_state = "ready" if self._api_token else "paused"
+        add_module(
+            "Market stream",
+            stream_state,
+            f"канал={connectivity.get('active_channel', 'n/a')}",
+            severity="warning" if not self._api_token else "normal",
+            status="running" if self._api_token else "paused",
+        )
+
+        session_state = self._session_guard.evaluate()
+        add_module(
+            "Session schedule",
+            "ready" if session_state.active else "paused",
+            session_state.reason or "в окне",
+            severity="normal" if session_state.active else "warning",
+            status="running" if session_state.active else "paused",
+        )
+
+        manual_state = self._manual_override.status()
+        override_detail = manual_state.reason or "нет флага"
+        if manual_state.expires_at:
+            override_detail += f";до={manual_state.expires_at.isoformat()}"
+        add_module(
+            "Manual override",
+            "error" if manual_state.halted else "ready",
+            override_detail,
+            severity="error" if manual_state.halted else "normal",
+            status="error" if manual_state.halted else "running",
+        )
+
+        resource_snapshot = self._resource_monitor.snapshot()
+        resource_severity = (
+            "warning"
+            if (
+                resource_snapshot.cpu_percent >= self._resource_monitor.cpu_threshold
+                or resource_snapshot.memory_percent >= self._resource_monitor.memory_threshold
+                or (
+                    resource_snapshot.gpu_memory_percent is not None
+                    and resource_snapshot.gpu_memory_percent >= self._resource_monitor.gpu_threshold
+                )
             )
+            else "normal"
+        )
+        add_module(
+            "Resources",
+            "warning" if resource_severity == "warning" else "ready",
+            (
+                f"cpu={resource_snapshot.cpu_percent:.1f}% "
+                f"ram={resource_snapshot.memory_percent:.1f}% "
+                f"gpu={(resource_snapshot.gpu_memory_percent or 0.0):.1f}%"
+            ),
+            severity=resource_severity,
+        )
+
+        add_module(
+            "Feature pipeline",
+            "ready",
+            (
+                f"глубина={self._config.features.lob_levels}; "
+                f"окно={self._config.features.rolling_window}"
+            ),
+        )
+
+        ml_device = self._ml_engine.device_mode or "cpu"
+        ml_state = "ready" if ml_device else "paused"
+        add_module(
+            "ML engine",
+            ml_state,
+            f"режим={ml_device}; задержка={self._ml_engine.throttle_delay * 1000:.0f}мс",
+            severity="warning" if self._ml_engine.throttle_delay > 0 else "normal",
+            status="running" if ml_device else "paused",
+        )
+
+        fallback_state = "ready" if self._config.fallback.enabled else "paused"
+        fallback_detail = f"квота={self._fallback.remaining_allowance()}"
+        fallback_last = self._fallback.last_rejection
+        if fallback_last:
+            fallback_detail += f";посл={fallback_last}"
+        add_module(
+            "Fallback signals",
+            fallback_state,
+            fallback_detail,
+            severity="warning" if not self._config.fallback.enabled else "normal",
+            status="running" if self._config.fallback.enabled else "paused",
+        )
+
+        risk_snapshot = self._risk_engine.snapshot()
+        risk_state = "error" if risk_snapshot.get("halt_trading") else "ready"
+        risk_detail = (
+            f"PnL={risk_snapshot.get('realized_pnl', 0.0):.2f}; "
+            f"ордера={risk_snapshot.get('order_count', 0)}"
+        )
+        if risk_snapshot.get("loss_cooldown_until"):
+            risk_detail += f";охлаждение={risk_snapshot['loss_cooldown_until']}"
+        add_module(
+            "Risk engine",
+            risk_state,
+            risk_detail,
+            severity="error" if risk_snapshot.get("halt_trading") else "warning"
+            if risk_snapshot.get("daily_loss_triggered")
+            else "normal",
+            status="error" if risk_snapshot.get("halt_trading") else "running",
+        )
+
+        exec_state = "paused" if self._execution_engine.paper else "ready"
+        add_module(
+            "Execution",
+            exec_state,
+            f"режим={self._execution_engine.mode}",
+            severity="warning" if self._execution_engine.paper else "normal",
+            status="paused" if self._execution_engine.paper else "running",
+        )
+
+        add_module(
+            "Tinkoff Adapter",
+            "ready" if self._api_token else "paused",
+            "token=***" if self._api_token else "нет токена",
+            severity="normal" if self._api_token else "warning",
+            status="running" if self._api_token else "paused",
+        )
+
+        storage_detail = (
+            f"signals={self._config.dashboard.repository_path.name}; "
+            f"storage={self._config.storage.base_path}"
+        )
+        add_module("Storage", "ready", storage_detail)
+
+        add_module(
+            "Connectivity",
+            "ready" if not connectivity.get("failure_count") else "warning",
+            (
+                f"канал={connectivity.get('active_channel', 'n/a')}; "
+                f"ошибок={connectivity.get('failure_count', 0)}"
+            ),
+            severity="warning" if connectivity.get("failure_count") else "normal",
         )
 
         heartbeat_info = self._heartbeat.diagnostics()
-        heartbeat_state = "ON" if heartbeat_info.get("enabled") else "OFF"
+        heartbeat_state = "ready" if heartbeat_info.get("enabled") else "paused"
         last = heartbeat_info.get("last_beat")
-        heartbeat_detail = (
-            f"last={last.isoformat()}" if isinstance(last, datetime) else "no data"
-        )
-        modules.append(
-            ModuleStatus(
-                "Heartbeat",
-                heartbeat_state,
-                heartbeat_detail,
-                "warning" if heartbeat_info.get("misses") else "normal",
-                "running" if heartbeat_info.get("enabled") else "inactive",
-            )
+        last_text = last.isoformat() if isinstance(last, datetime) else "нет данных"
+        add_module(
+            "Heartbeat",
+            heartbeat_state,
+            f"посл={last_text}",
+            severity="warning" if heartbeat_info.get("misses") else "normal",
+            status="running" if heartbeat_info.get("enabled") else "paused",
         )
 
-        errors: list[str] = []
-        if risk_snapshot.get("emergency_reason"):
-            errors.append(f"Emergency halt: {risk_snapshot['emergency_reason']}")
-        if risk_snapshot.get("calibration_required"):
-            expiry = risk_snapshot.get("calibration_expiry")
-            if expiry:
-                errors.append(f"Calibration required until {expiry}")
+        signals = []
+        for record in self._repository.fetch_signals(limit=self._config.dashboard.signal_limit):
+            timestamp = record.get("timestamp")
+            if isinstance(timestamp, datetime):
+                timestamp_str = timestamp.isoformat()
             else:
-                errors.append("Calibration required")
+                timestamp_str = str(timestamp)
+            signals.append(
+                {
+                    "figi": record.get("figi"),
+                    "score": record.get("confidence"),
+                    "timestamp": timestamp_str,
+                }
+            )
+
+        alerts: list[dict[str, str]] = []
+        now_iso = datetime.utcnow().isoformat()
+        if risk_snapshot.get("halt_trading"):
+            alerts.append({"id": "risk.halt", "severity": "critical", "since": now_iso})
+        if risk_snapshot.get("daily_loss_triggered"):
+            alerts.append({"id": "risk.daily_limit", "severity": "warning", "since": now_iso})
         if manual_state.halted:
-            reason = manual_state.reason or "manual override"
-            if manual_state.expires_at:
-                reason += f" until {manual_state.expires_at.isoformat()}"
-            errors.append(f"Manual override active: {reason}")
-        if self._latency_events:
-            alert = self._latency_events[-1]
-            errors.append(
-                (
-                    f"Latency alert {alert.stage}: {alert.latency_ms:.1f}ms > "
-                    f"{alert.threshold_ms:.1f}ms ({alert.severity})"
-                )
-            )
-        heartbeat_failure = heartbeat_info.get("last_failure_reason")
-        if heartbeat_failure:
-            errors.append(f"Heartbeat failures: {heartbeat_failure}")
+            alerts.append({"id": "manual.override", "severity": "critical", "since": now_iso})
         if fallback_last:
-            errors.append(f"Fallback rejection: {fallback_last}")
+            alerts.append({"id": "fallback.rejection", "severity": "warning", "since": now_iso})
 
-        processes: list[str] = []
+        metrics = {
+            "cpu": round(resource_snapshot.cpu_percent, 2),
+            "ram": round(resource_snapshot.memory_percent, 2),
+            "gpu": round(resource_snapshot.gpu_memory_percent or 0.0, 2)
+            if resource_snapshot.gpu_memory_percent is not None
+            else 0.0,
+            "liquidity": round(self._metrics.liquidity_score, 3),
+        }
+        metrics.update({f"latency_{stage}": round(value, 2) for stage, value in self._metrics.latency_ms.items()})
 
-        def describe_task(task: Optional[asyncio.Task], label: str) -> None:
-            if task is None:
-                return
-            if task.cancelled():
-                state = "cancelled"
-            elif task.done():
-                exc = task.exception()
-                if exc:
-                    errors.append(f"{label} failed: {exc}")
-                    state = "error"
-                else:
-                    state = "finished"
-            else:
-                state = "running"
-            processes.append(f"{label}: {state}")
+        ml_overview = self._ml_engine.ensemble_overview()
+        ml_models = [
+            {
+                "name": name,
+                "scope": "base",
+                "weight": f"{weight:.3f}",
+                "roc": "-",
+                "f1": "-",
+                "updated": "-",
+            }
+            for name, weight in ml_overview.get("base_weights", {}).items()
+        ]
+        for asset_class, weights in ml_overview.get("class_weights", {}).items():
+            for name, weight in weights.items():
+                ml_models.append(
+                    {
+                        "name": name,
+                        "scope": asset_class,
+                        "weight": f"{weight:.3f}",
+                        "roc": "-",
+                        "f1": "-",
+                        "updated": "-",
+                    }
+                )
+        ml_metrics = {
+            "device": ml_overview.get("device_mode", "unknown"),
+            "throttle_ms": int(ml_overview.get("throttle_delay", 0.0) * 1000),
+        }
 
-        describe_task(self._checkpoint_task, "Checkpoint loop")
-        describe_task(self._heartbeat_task, "Heartbeat monitor")
-        describe_task(self._training_task, "Training scheduler")
-        for task in self._risk_tasks:
-            label = self._risk_task_labels.get(task, task.get_name() or "Risk task")
-            describe_task(task, label)
+        risk_positions = [
+            {
+                "figi": pos.get("figi"),
+                "qty": pos.get("quantity"),
+                "pnl": f"{risk_snapshot.get('realized_pnl', 0.0):.2f}",
+                "stop": pos.get("stop_loss"),
+            }
+            for pos in risk_snapshot.get("positions", [])
+        ]
+        risk_params = {
+            "max_position": self._config.risk.max_position,
+            "max_exposure_pct": self._config.risk.max_exposure_pct,
+            "daily_stop": self._config.risk.daily_loss_limit,
+        }
 
-        processes.append(
-            f"Disaster recovery: {'enabled' if self._config.disaster_recovery.enabled else 'disabled'}"
-        )
-        processes.append(
-            f"Performance reporter: {'enabled' if self._config.reporting.enabled else 'disabled'}"
-        )
-        if self._active_manual_training:
-            processes.append(
-                f"Manual training: running x{self._active_manual_training}"
-            )
-        if self._active_backtests:
-            processes.append(
-                f"Manual backtest: running x{self._active_backtests}"
-            )
+        execution_info = {
+            "queue": [],
+            "mode": {"mode": self._execution_engine.mode, "paper": self._execution_engine.paper},
+            "fills": [],
+            "stats": {},
+        }
 
-        return DashboardStatus(
-            modules=modules,
-            processes=processes,
-            errors=errors,
-            ensemble=self._ml_engine.ensemble_overview(),
-            instruments={
-                "active": list(self._data_engine.active_instruments()),
-                "monitored": list(self._data_engine.monitored_instruments()),
+        adapter_info = {
+            "quota": {},
+            "errors": {},
+            "diagnostics": {
+                "channel": connectivity.get("active_channel", "n/a"),
+                "token_present": bool(self._api_token),
             },
-        )
+        }
+
+        bus_info = {
+            "state": "up" if self._event_bus else "down",
+            "host": self._config.bus.host,
+            "port": (self._event_bus.port if self._event_bus else self._config.bus.port),
+            "rps": 0,
+            "lag_ms": 0,
+            "topics": [],
+            "events": [
+                {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "type": alert.severity if isinstance(alert, LatencyAlert) else "latency",
+                    "payload": getattr(alert, "stage", "latency") if isinstance(alert, LatencyAlert) else "",
+                }
+                for alert in list(self._latency_events)[-5:]
+            ],
+        }
+
+        logs_info = {
+            "tail": [f"{item['id']}:{item['severity']}" for item in alerts],
+            "metrics": {"alerts": len(alerts)},
+        }
+
+        build_info = {
+            "version": "unknown",
+            "uptime_s": int((datetime.utcnow() - self._started_at).total_seconds()),
+            "mode": self._config.system.mode,
+        }
+
+        data_section = {
+            "active": active,
+            "monitored": monitored,
+            "queues": data_snapshot.get("queues", {}),
+            "errors": data_snapshot.get("errors", 0),
+        }
+
+        ml_section = {
+            "models": ml_models,
+            "jobs": [],
+            "metrics": ml_metrics,
+            "artifacts": [],
+        }
+
+        risk_section = {
+            "profile": {
+                "realized_pnl": risk_snapshot.get("realized_pnl", 0.0),
+                "order_count": risk_snapshot.get("order_count", 0),
+                "cooldown_until": risk_snapshot.get("loss_cooldown_until"),
+            },
+            "exposure": risk_positions,
+            "params": risk_params,
+            "alerts": alerts,
+            "log": [],
+        }
+
+        status = {
+            "build": build_info,
+            "modules": modules,
+            "alerts": alerts,
+            "signals": signals,
+            "orders": [],
+            "metrics": metrics,
+            "data": data_section,
+            "ml": ml_section,
+            "risk": risk_section,
+            "execution": execution_info,
+            "adapter": adapter_info,
+            "bus": bus_info,
+            "logs": logs_info,
+        }
+
+        return status
 
     def replace_instrument(self, current: str, replacement: str) -> tuple[bool, str]:
         current_clean = (current or "").strip()
