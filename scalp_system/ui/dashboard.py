@@ -71,22 +71,7 @@ class DashboardUI:
         self._headless = headless or tk is None
         self._closed = False
         self._status_error: Optional[str] = None
-
-        if not self._headless:
-            assert tk is not None and ttk is not None  # for type-checkers
-            try:
-                self._root = tk.Tk()  # type: ignore[call-arg]
-            except Exception as exc:  # pragma: no cover - headless fallback
-                LOGGER.warning("Falling back to headless dashboard: %s", exc)
-                self._headless = True
-                self._root = None
-            else:
-                self._root.title(self._title)
-                self._root.configure(bg="#0f172a")
-                self._build_layout()
-                self._root.protocol("WM_DELETE_WINDOW", self._on_close)
-        else:
-            self._root = None
+        self._root = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -97,6 +82,13 @@ class DashboardUI:
         if self._headless:
             self.refresh_once()
             return
+
+        self._ensure_root()
+        if self._headless:
+            # ``_ensure_root`` may switch to headless if Tk initialisation fails.
+            self.refresh_once()
+            return
+
         self.refresh_once()
         self._schedule_refresh()
         assert self._root is not None
@@ -452,6 +444,24 @@ class DashboardUI:
         if self._root is not None:
             self._root.quit()
 
+    def _ensure_root(self) -> None:
+        """Initialise the Tk root in the current thread if required."""
+
+        if self._headless or self._root is not None:
+            return
+        assert tk is not None and ttk is not None  # for type-checkers
+        try:
+            root = tk.Tk()  # type: ignore[call-arg]
+        except Exception as exc:  # pragma: no cover - headless fallback
+            LOGGER.warning("Falling back to headless dashboard: %s", exc)
+            self._headless = True
+            return
+        self._root = root
+        self._root.title(self._title)
+        self._root.configure(bg="#0f172a")
+        self._build_layout()
+        self._root.protocol("WM_DELETE_WINDOW", self._on_close)
+
 
 def run_dashboard(
     repository_path: Path,
@@ -469,22 +479,24 @@ def run_dashboard(
     returned. Otherwise this function blocks until the window is closed.
     """
 
-    repository = SQLiteRepository(repository_path)
-    ui = DashboardUI(
-        repository,
-        status_provider=status_provider,
-        refresh_interval_ms=refresh_interval_ms,
-        signal_limit=signal_limit,
-        headless=headless,
-        title=title,
-    )
+    def _run_ui() -> None:
+        repository = SQLiteRepository(repository_path)
+        ui = DashboardUI(
+            repository,
+            status_provider=status_provider,
+            refresh_interval_ms=refresh_interval_ms,
+            signal_limit=signal_limit,
+            headless=headless,
+            title=title,
+        )
+        ui.run()
 
     if background:
-        thread = threading.Thread(target=ui.run, daemon=True)
+        thread = threading.Thread(target=_run_ui, daemon=True)
         thread.start()
         return thread
 
-    ui.run()
+    _run_ui()
     return None
 
 
