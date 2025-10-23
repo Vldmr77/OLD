@@ -94,6 +94,7 @@ def test_event_bus_registers_dashboard_commands(tmp_path):
             "system.restart",
             "system.pause",
             "system.resume",
+            "system.shutdown",
             "system.backtest",
             "system.backtest.create",
             "system.train",

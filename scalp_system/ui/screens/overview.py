@@ -60,22 +60,25 @@ class OverviewScreen:
         actions = ttk.Frame(self._frame, style="Dashboard.Section.TFrame")
         actions.grid(row=2, column=1, sticky="ew", padx=8, pady=6)
         self._buttons: list[tuple[object, bool]] = []
-        for idx, (text_key, command, requires_bus) in enumerate(
-            [
-                ("btn_restart", "system.restart", True),
-                ("btn_pause", "system.pause", True),
-                ("btn_resume", "system.resume", True),
-                ("btn_reset_risk", "risk.reset_stops", True),
-                ("btn_refresh", None, False),
-            ]
-        ):
+        action_specs = [
+            ("btn_restart", "system.restart", True),
+            ("btn_pause", "system.pause", True),
+            ("btn_resume", "system.resume", True),
+            ("btn_reset_risk", "risk.reset_stops", True),
+            ("btn_refresh", None, False),
+            ("btn_exit", "system.shutdown", True),
+        ]
+        columns = 3
+        for idx, (text_key, command, requires_bus) in enumerate(action_specs):
+            row, column = divmod(idx, columns)
             btn = ttk.Button(
                 actions,
                 text=RU[text_key],
                 command=(lambda cmd=command: self._context.emit(cmd)),
             )
-            btn.grid(row=0, column=idx, padx=4, pady=4, sticky="ew")
-            actions.columnconfigure(idx, weight=1)
+            btn.grid(row=row, column=column, padx=4, pady=4, sticky="ew")
+            actions.columnconfigure(column, weight=1)
+            actions.rowconfigure(row, weight=1)
             self._buttons.append((btn, requires_bus))
 
         signals_frame = create_section(self._frame, RU["signals_header"], pack=False)

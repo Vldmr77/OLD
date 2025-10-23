@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from typing import Literal, Optional
 
@@ -33,6 +34,7 @@ class ExecutionEngine:
             mode if mode in {"production", "forward-test", "development"} else "production"
         )
         self._paper = self._mode != "production"
+        self._last_broker_latency_ms: Optional[float] = None
         if not self._paper and (OrderDirection is None or OrderType is None):
             raise RuntimeError("tinkoff-investments SDK is required for execution")
 
@@ -40,11 +42,13 @@ class ExecutionEngine:
         self, signal: MLSignal, plan: OrderPlan, price: float
     ) -> ExecutionReport:
         if self._paper:
+            self._last_broker_latency_ms = None
             self._risk_engine.register_order(plan.slices)
             self._risk_engine.update_position(
                 signal.figi, signal.direction * plan.quantity, price, plan.stop_loss
             )
             return ExecutionReport(figi=signal.figi, accepted=True)
+        start = time.perf_counter()
         direction = (
             OrderDirection.ORDER_DIRECTION_BUY
             if signal.direction > 0
@@ -67,6 +71,8 @@ class ExecutionEngine:
             except Exception as exc:  # pragma: no cover - defensive branch
                 LOGGER.exception("Order placement failed: %s", exc)
                 return ExecutionReport(figi=signal.figi, accepted=False, reason=str(exc))
+            finally:
+                self._last_broker_latency_ms = (time.perf_counter() - start) * 1000.0
 
     async def cancel_all_orders(self) -> int:
         if self._paper:
@@ -138,6 +144,10 @@ class ExecutionEngine:
 
     def set_broker_factory(self, factory) -> None:
         self._broker_factory = factory
+
+    @property
+    def last_broker_latency_ms(self) -> Optional[float]:
+        return self._last_broker_latency_ms
 
 
 __all__ = ["ExecutionEngine", "ExecutionReport"]
