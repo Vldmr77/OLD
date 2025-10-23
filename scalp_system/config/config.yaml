@@ -1,5 +1,5 @@
 system:
-  mode: forward-test
+  mode: production
   startup_time: "09:30"
   checkpoint_interval_seconds: 300
   latency_thresholds:
@@ -24,8 +24,9 @@ logging:
   level: DEBUG
 datafeed:
   sandbox_token: "t.FVti568rNsdMJIuNMApjAMfCNJy8mfZaOgJmb03gpcO1ahFDM-_ttXCX4dfHYmketl9JsmDahGQ7mzSfrrhb6Q"
-  use_sandbox: true
-  allow_tokenless: true
+  production_token: "t.baeBGxS1nYnaHLZ7tC328DzwPNpTQwDq70GZ8YSp3Q1Ek0N4g2Htzv3hBzbQIrsdcu70xICbCgDIq_19SWEppA"
+  use_sandbox: false
+  allow_tokenless: false
   instruments:
     - BBG004730N88   # SBER
     - BBG004731032   # SBERP
