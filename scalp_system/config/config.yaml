@@ -23,7 +23,7 @@ environment: development
 logging:
   level: DEBUG
 datafeed:
-  sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
+  sandbox_token: "t.FVti568rNsdMJIuNMApjAMfCNJy8mfZaOgJmb03gpcO1ahFDM-_ttXCX4dfHYmketl9JsmDahGQ7mzSfrrhb6Q"
   use_sandbox: true
   allow_tokenless: true
   instruments:
