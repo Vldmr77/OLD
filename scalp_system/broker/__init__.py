@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from .tinkoff import (
+    BrokerConnectionOptions,
     TinkoffAPI,
     TinkoffSDKUnavailable,
     ensure_sdk_available,
@@ -9,6 +10,7 @@ from .tinkoff import (
 )
 
 __all__ = [
+    "BrokerConnectionOptions",
     "TinkoffAPI",
     "TinkoffSDKUnavailable",
     "ensure_sdk_available",

@@ -15,6 +15,7 @@ from threading import Lock, Thread
 from typing import Callable, Deque, Dict, Optional
 
 from .broker.tinkoff import (
+    BrokerConnectionOptions,
     TinkoffAPI,
     TinkoffSDKUnavailable,
     ensure_sdk_available,
@@ -164,12 +165,20 @@ class Orchestrator:
             self._key_manager = None
         self._started_at = datetime.utcnow()
         self._api_token = self._resolve_api_token()
+        self._tinkoff_connection_options = BrokerConnectionOptions(
+            mode=self._config.brokers.tinkoff.connection_mode,
+            proxy_url=self._config.brokers.tinkoff.proxy_url,
+            no_proxy=self._config.brokers.tinkoff.no_proxy_hosts,
+        )
         self._rest_api: Optional[TinkoffAPI] = None
         if self._api_token:
             self._rest_api = TinkoffAPI(
                 token=self._api_token,
                 use_sandbox=self._config.datafeed.use_sandbox,
                 account_id=self._config.execution.account_id,
+                connection_mode=self._tinkoff_connection_options.mode,
+                proxy_url=self._tinkoff_connection_options.proxy_url,
+                no_proxy=self._tinkoff_connection_options.no_proxy,
             )
         self._broker_factory_fn = self._broker_factory()
         self._execution_engine = ExecutionEngine(
@@ -241,6 +250,12 @@ class Orchestrator:
         self._config.execution.account_id = fresh_config.execution.account_id
         self._config.brokers = fresh_config.brokers
 
+        self._tinkoff_connection_options = BrokerConnectionOptions(
+            mode=self._config.brokers.tinkoff.connection_mode,
+            proxy_url=self._config.brokers.tinkoff.proxy_url,
+            no_proxy=self._config.brokers.tinkoff.no_proxy_hosts,
+        )
+
         previous = self._api_token or ""
         self._api_token = self._resolve_api_token() or None
         if self._api_token:
@@ -248,6 +263,9 @@ class Orchestrator:
                 token=self._api_token,
                 use_sandbox=self._config.datafeed.use_sandbox,
                 account_id=self._config.execution.account_id,
+                connection_mode=self._tinkoff_connection_options.mode,
+                proxy_url=self._tinkoff_connection_options.proxy_url,
+                no_proxy=self._tinkoff_connection_options.no_proxy,
             )
         else:
             self._rest_api = None
@@ -301,6 +319,7 @@ class Orchestrator:
                 use_sandbox=self._config.datafeed.use_sandbox,
                 instruments=self._data_engine.active_instruments(),
                 depth=self._config.datafeed.depth,
+                connection_options=self._tinkoff_connection_options,
             )
 
         return factory
@@ -337,6 +356,7 @@ class Orchestrator:
                 sandbox=self._config.datafeed.use_sandbox,
                 account_id=self._config.execution.account_id,
                 orders_per_minute=self._config.risk.max_order_rate_per_minute,
+                connection_options=self._tinkoff_connection_options,
             )
 
         return factory

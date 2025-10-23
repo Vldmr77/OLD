@@ -1,4 +1,5 @@
 import asyncio
+import os
 from datetime import datetime, timezone, timedelta
 
 import pytest
@@ -8,13 +9,15 @@ from scalp_system.data.models import OrderBook
 
 
 class DummyClient:
-    def __init__(self, token: str, target=None) -> None:
+    def __init__(self, token: str, target=None, **kwargs) -> None:
         self.token = token
         self.target = target
         self.closed = False
         self.users = self.Users()
         self.market_data = self.MarketData()
         self.operations = self.Operations()
+        self.grpc_http_proxy = os.environ.get("grpc.http_proxy")
+        self.options = kwargs.get("options")
 
     async def close(self) -> None:
         self.closed = True
@@ -104,8 +107,29 @@ def test_open_async_client(monkeypatch):
             assert isinstance(client, DummyClient)
             assert client.token == "TOKEN"
             assert client.target.endswith("sandbox-invest-public-api.tinkoff.ru:443")
+            assert client.options is None
 
     asyncio.run(run())
+
+
+def test_open_async_client_direct_mode(monkeypatch):
+    monkeypatch.setattr(tinkoff_module, "AsyncClient", DummyClient)
+    monkeypatch.setenv("http_proxy", "http://proxy:8080")
+    options = tinkoff_module.BrokerConnectionOptions(mode="direct")
+
+    async def run():
+        async with tinkoff_module.open_async_client(
+            "TOKEN",
+            use_sandbox=False,
+            connection_options=options,
+        ) as client:
+            assert isinstance(client, DummyClient)
+            assert client.grpc_http_proxy is None
+            assert client.options == [("grpc.enable_http_proxy", 0)]
+
+    asyncio.run(run())
+    # ensure original proxy value restored after context manager
+    assert os.environ.get("http_proxy") == "http://proxy:8080"
 
 
 def test_tinkoff_api_fetch(monkeypatch):

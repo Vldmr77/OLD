@@ -40,9 +40,36 @@ def ensure_sdk_available() -> None:
             "`pip install tinkoff_investments-0.2.0b117-py3-none-any.whl`."
         )
 
+@dataclass
+class BrokerConnectionOptions:
+    """Connection preferences for reaching the Tinkoff gRPC endpoints."""
+
+    mode: str = "auto"
+    proxy_url: Optional[str] = None
+    no_proxy: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        mode = (self.mode or "auto").strip().lower()
+        if mode not in {"auto", "direct", "proxy"}:
+            mode = "auto"
+        self.mode = mode
+        proxy = (self.proxy_url or "").strip()
+        self.proxy_url = proxy or None
+        if isinstance(self.no_proxy, (list, set)):
+            hosts = [str(item).strip() for item in self.no_proxy if str(item).strip()]
+        elif isinstance(self.no_proxy, tuple):
+            hosts = [str(item).strip() for item in self.no_proxy if str(item).strip()]
+        elif self.no_proxy:
+            hosts = [str(self.no_proxy).strip()]
+        else:
+            hosts = []
+        self.no_proxy = tuple(dict.fromkeys(hosts))
+
 
 @contextmanager
-def _grpc_environment() -> Iterator[None]:
+def _grpc_environment(
+    target_host: str, options: Optional[BrokerConnectionOptions]
+) -> Iterator[None]:
     """Temporarily adjust environment variables for gRPC connections."""
 
     saved: dict[str, Optional[str]] = {}
@@ -63,20 +90,47 @@ def _grpc_environment() -> Iterator[None]:
     if cert_path and os.path.exists(cert_path):
         _set_env("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", cert_path)
 
-    existing_no_proxy = os.environ.get("grpc.no_proxy", "")
-    no_proxy_hosts = "invest-public-api.tinkoff.ru,invest-public-api.tinkoff.ru:443"
-    if no_proxy_hosts not in existing_no_proxy:
-        combined = f"{existing_no_proxy},{no_proxy_hosts}" if existing_no_proxy else no_proxy_hosts
-        _set_env("grpc.no_proxy", combined)
+    no_proxy_entries = [target_host, f"{target_host}:443"]
+    if options:
+        no_proxy_entries.extend(options.no_proxy)
+    existing_entries = [
+        entry.strip()
+        for entry in os.environ.get("grpc.no_proxy", "").split(",")
+        if entry.strip()
+    ]
+    combined_entries = list(dict.fromkeys(existing_entries + no_proxy_entries))
+    if combined_entries:
+        _set_env("grpc.no_proxy", ",".join(combined_entries))
 
-    for std_key, grpc_key in (
-        ("http_proxy", "grpc.http_proxy"),
-        ("https_proxy", "grpc.https_proxy"),
-        ("HTTP_PROXY", "grpc.HTTP_PROXY"),
-        ("HTTPS_PROXY", "grpc.HTTPS_PROXY"),
-    ):
-        if std_key in os.environ:
-            _set_env(grpc_key, os.environ[std_key])
+    mode = options.mode if options else "auto"
+
+    std_proxy_keys = ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY")
+    grpc_proxy_keys = ("grpc.http_proxy", "grpc.https_proxy", "grpc.HTTP_PROXY", "grpc.HTTPS_PROXY")
+
+    if mode == "direct":
+        for key in (*std_proxy_keys, *grpc_proxy_keys):
+            _set_env(key, None)
+        for key in ("no_proxy", "NO_PROXY"):
+            existing = [
+                entry.strip()
+                for entry in os.environ.get(key, "").split(",")
+                if entry.strip()
+            ]
+            combined = list(dict.fromkeys(existing + no_proxy_entries))
+            if combined:
+                _set_env(key, ",".join(combined))
+            else:
+                _set_env(key, None)
+        _set_env("GRPC_PROXY_EXP", None)
+    else:
+        proxy_value = options.proxy_url if options and options.proxy_url else None
+        if proxy_value:
+            for key in grpc_proxy_keys:
+                _set_env(key, proxy_value)
+        else:
+            for std_key, grpc_key in zip(std_proxy_keys, grpc_proxy_keys):
+                if std_key in os.environ:
+                    _set_env(grpc_key, os.environ[std_key])
 
     try:
         yield None
@@ -89,7 +143,12 @@ def _grpc_environment() -> Iterator[None]:
 
 
 @asynccontextmanager
-async def open_async_client(token: str, *, use_sandbox: bool) -> AsyncIterator[Any]:
+async def open_async_client(
+    token: str,
+    *,
+    use_sandbox: bool,
+    connection_options: Optional[BrokerConnectionOptions] = None,
+) -> AsyncIterator[Any]:
     """Yield an authenticated asynchronous client from the SDK.
 
     The upstream ``tinkoff-investments`` package exposes ``AsyncClient`` purely as a
@@ -105,20 +164,26 @@ async def open_async_client(token: str, *, use_sandbox: bool) -> AsyncIterator[A
     assert AsyncClient is not None  # for type-checkers
     target_host = INVEST_GRPC_API_SANDBOX if use_sandbox else INVEST_GRPC_API
     target = f"{target_host}:443"
-    with _grpc_environment():
-        client = AsyncClient(token, target=target)
-    if hasattr(client, "__aenter__") and hasattr(client, "__aexit__"):
-        async with client as services:
-            yield services
-    else:  # pragma: no cover - fallback for mocked clients without context manager
-        try:
-            yield client
-        finally:
-            close = getattr(client, "close", None)
-            if close is not None:
-                result = close()
-                if asyncio.iscoroutine(result):
-                    await result
+    options = []
+    if connection_options and connection_options.mode == "direct":
+        options.append(("grpc.enable_http_proxy", 0))
+    elif connection_options and connection_options.proxy_url:
+        options.append(("grpc.enable_http_proxy", 1))
+
+    with _grpc_environment(target_host, connection_options):
+        client = AsyncClient(token, target=target, options=options or None)
+        if hasattr(client, "__aenter__") and hasattr(client, "__aexit__"):
+            async with client as services:
+                yield services
+        else:  # pragma: no cover - fallback for mocked clients without context manager
+            try:
+                yield client
+            finally:
+                close = getattr(client, "close", None)
+                if close is not None:
+                    result = close()
+                    if asyncio.iscoroutine(result):
+                        await result
 
 
 class AsyncRateLimiter:
@@ -146,15 +211,27 @@ class TinkoffAPI:
     use_sandbox: bool = True
     account_id: Optional[str] = None
     rate_limit_per_minute: int = 120
+    connection_mode: str = "auto"
+    proxy_url: Optional[str] = None
+    no_proxy: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         self._limiter = AsyncRateLimiter(self.rate_limit_per_minute)
+        self._connection_options = BrokerConnectionOptions(
+            mode=self.connection_mode,
+            proxy_url=self.proxy_url,
+            no_proxy=self.no_proxy,
+        )
 
     @asynccontextmanager
     async def client(self) -> AsyncIterator[Any]:
         """Yield a configured ``AsyncClient`` instance."""
 
-        async with open_async_client(self.token, use_sandbox=self.use_sandbox) as client:
+        async with open_async_client(
+            self.token,
+            use_sandbox=self.use_sandbox,
+            connection_options=self._connection_options,
+        ) as client:
             yield client
 
     async def ping(self) -> None:
@@ -295,6 +372,7 @@ def _ensure_timestamp(value) -> datetime:
 
 
 __all__ = [
+    "BrokerConnectionOptions",
     "AsyncRateLimiter",
     "TinkoffAPI",
     "TinkoffSDKUnavailable",

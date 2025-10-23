@@ -242,3 +242,6 @@ backtest:
 brokers:
   tinkoff:
     tokens_file: ./runtime/tinkoff_tokens.json
+    connection_mode: direct
+    proxy_url: null
+    no_proxy_hosts: []

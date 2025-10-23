@@ -12,7 +12,11 @@ from pathlib import Path
 from typing import AsyncIterator, Awaitable, Callable, Deque, Iterable, Optional
 
 from .models import OrderBook, OrderBookLevel
-from ..broker.tinkoff import ensure_sdk_available, open_async_client
+from ..broker.tinkoff import (
+    BrokerConnectionOptions,
+    ensure_sdk_available,
+    open_async_client,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +39,7 @@ class MarketDataStream:
         instruments: Iterable[str],
         depth: int,
         reconnect_backoff: float = 1.0,
+        connection_options: BrokerConnectionOptions | None = None,
     ) -> None:
         ensure_sdk_available()
         self._token = token
@@ -45,9 +50,14 @@ class MarketDataStream:
         self._client_cm = None
         self._client = None
         self._stream: Optional[AsyncMarketDataStreamManager] = None
+        self._connection_options = connection_options
 
     async def __aenter__(self) -> "MarketDataStream":
-        self._client_cm = open_async_client(self._token, use_sandbox=self._use_sandbox)
+        self._client_cm = open_async_client(
+            self._token,
+            use_sandbox=self._use_sandbox,
+            connection_options=self._connection_options,
+        )
         self._client = await self._client_cm.__aenter__()
         self._stream = self._client.create_market_data_stream()
         await self._subscribe_order_book()

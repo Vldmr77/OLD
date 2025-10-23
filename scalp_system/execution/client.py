@@ -13,7 +13,12 @@ except ImportError:  # pragma: no cover
     OrderDirection = None  # type: ignore
     OrderType = None  # type: ignore
 
-from ..broker.tinkoff import AsyncRateLimiter, ensure_sdk_available, open_async_client
+from ..broker.tinkoff import (
+    AsyncRateLimiter,
+    BrokerConnectionOptions,
+    ensure_sdk_available,
+    open_async_client,
+)
 
 
 @dataclass
@@ -28,7 +33,13 @@ class OrderRequest:
 
 class BrokerClient:
     def __init__(
-        self, token: str, *, sandbox: bool, account_id: Optional[str] = None, orders_per_minute: int = 60
+        self,
+        token: str,
+        *,
+        sandbox: bool,
+        account_id: Optional[str] = None,
+        orders_per_minute: int = 60,
+        connection_options: BrokerConnectionOptions | None = None,
     ) -> None:
         ensure_sdk_available()
         self._token = token
@@ -37,9 +48,14 @@ class BrokerClient:
         self._client_cm = None
         self._client = None
         self._limiter = AsyncRateLimiter(max(1, orders_per_minute))
+        self._connection_options = connection_options
 
     async def __aenter__(self) -> "BrokerClient":
-        self._client_cm = open_async_client(self._token, use_sandbox=self._sandbox)
+        self._client_cm = open_async_client(
+            self._token,
+            use_sandbox=self._sandbox,
+            connection_options=self._connection_options,
+        )
         self._client = await self._client_cm.__aenter__()
         return self
 

@@ -290,6 +290,9 @@ class BusConfig:
 @dataclass
 class TinkoffBrokerConfig:
     tokens_file: Path = Path("tinkoff_tokens.json")
+    connection_mode: str = "auto"
+    proxy_url: Optional[str] = None
+    no_proxy_hosts: tuple[str, ...] = field(default_factory=tuple)
 
     def ensure(self, base_path: Path) -> None:
         if not isinstance(self.tokens_file, Path):
@@ -303,6 +306,29 @@ class TinkoffBrokerConfig:
         path = path.expanduser()
         path.parent.mkdir(parents=True, exist_ok=True)
         self.tokens_file = path
+
+        mode = str(self.connection_mode or "auto").strip().lower()
+        if mode not in {"auto", "direct", "proxy"}:
+            mode = "auto"
+        self.connection_mode = mode
+
+        proxy_value = (self.proxy_url or "").strip()
+        self.proxy_url = proxy_value or None
+
+        hosts: list[str] = []
+        raw_hosts = self.no_proxy_hosts
+        if isinstance(raw_hosts, (list, tuple, set)):
+            iterable = raw_hosts
+        elif raw_hosts:
+            iterable = (raw_hosts,)
+        else:
+            iterable = ()
+        for host in iterable:
+            host_str = str(host).strip()
+            if host_str:
+                hosts.append(host_str)
+        # Preserve order while removing duplicates.
+        self.no_proxy_hosts = tuple(dict.fromkeys(hosts))
 
 
 @dataclass
