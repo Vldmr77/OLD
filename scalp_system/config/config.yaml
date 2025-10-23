@@ -1,6 +1,6 @@
 system:
   mode: forward-test
-  startup_time: "09:30"
+  startup_time: 09:30
   checkpoint_interval_seconds: 300
   latency_thresholds:
     features: 12.0
@@ -9,55 +9,55 @@ system:
   latency_violation_limit: 3
 session:
   enabled: true
-  start_time: "09:45"
-  end_time: "23:50"
+  start_time: 09:45
+  end_time: '23:50'
   pre_open_minutes: 10
   post_close_minutes: 5
   allowed_weekdays:
-    - 0
-    - 1
-    - 2
-    - 3
-    - 4
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
 environment: development
 logging:
   level: DEBUG
 datafeed:
-  sandbox_token: "enc:YOUR_ENCRYPTED_TOKEN"
+  sandbox_token: t.FVti568rNsdMJIuNMApjAMfCNJy8mfZaOgJmb03gpcO1ahFDM-_ttXCX4dfHYmketl9JsmDahGQ7mzSfrrhb6Q
   use_sandbox: true
   allow_tokenless: true
   instruments:
-    - BBG004730N88   # SBER
-    - BBG004731032   # SBERP
-    - BBG004730RP0   # GAZP
-    - BBG0047315D0   # LKOH
-    - BBG004731371   # GMKN
-    - BBG004731354   # ROSN
-    - BBG004731489   # NVTK
-    - BBG004730ZJ9   # TATN
-    - BBG004S68507   # MGNT
-    - BBG004S680K0   # MTSS
-    - BBG004S68157   # AFLT
-    - BBG004S686W0   # ALRS
-    - BBG004S683W7   # SNGS
-    - BBG004S683X6   # SNGSP
-    - BBG004S68696   # CHMF
-    - BBG004S686K0   # NLMK
-    - BBG00QPYJ5H0   # MOEX
-    - BBG00QPYJ639   # TCSG
-    - BBG006L8G4H1   # YNDX
-    - BBG00F3NC364   # FIVE
+  - BBG004730N88
+  - BBG004731032
+  - BBG004730RP0
+  - BBG0047315D0
+  - BBG004731371
+  - BBG004731354
+  - BBG004731489
+  - BBG004730ZJ9
+  - BBG004S68507
+  - BBG004S680K0
+  - BBG004S68157
+  - BBG004S686W0
+  - BBG004S683W7
+  - BBG004S683X6
+  - BBG004S68696
+  - BBG004S686K0
+  - BBG00QPYJ5H0
+  - BBG00QPYJ639
+  - BBG006L8G4H1
+  - BBG00F3NC364
   monitored_instruments:
-    - FUTSI1224000   # USD/RUB futures
-    - FUTRI1224000   # RTS Index futures
-    - FUTBR1224000   # Brent futures
-    - FUTGAZP1224000 # Gazprom futures
-    - FUTSBRF1224000 # Sberbank futures
-    - FUTLKOH1224000 # Lukoil futures
-    - FUTGMKN1224000 # Norilsk Nickel futures
-    - FUTROSN1224000 # Rosneft futures
-    - FUTNVTK1224000 # Novatek futures
-    - FUTPLZL1224000 # Polyus futures
+  - FUTSI1224000
+  - FUTRI1224000
+  - FUTBR1224000
+  - FUTGAZP1224000
+  - FUTSBRF1224000
+  - FUTLKOH1224000
+  - FUTGMKN1224000
+  - FUTROSN1224000
+  - FUTNVTK1224000
+  - FUTPLZL1224000
   max_active_instruments: 15
   monitor_pool_size: 30
   trade_history_size: 200
@@ -100,6 +100,7 @@ datafeed:
   soft_rss_limit_mb: 400
   hard_rss_limit_mb: 700
   reconnect_delay: 1.0
+  production_token: t.baeBGxS1nYnaHLZ7tC328DzwPNpTQwDq70GZ8YSp3Q1Ek0N4g2Htzv3hBzbQIrsdcu70xICbCgDIq_19SWEppA
 features:
   lob_levels: 10
   rolling_window: 20
@@ -140,7 +141,7 @@ risk_schedule:
   drift_check_interval_seconds: 1800
   hedging_interval_seconds: 300
 execution:
-  account_id: ""
+  account_id: ''
 storage:
   base_path: ./runtime
   signals_db: ./runtime/signals.db
@@ -165,15 +166,15 @@ dashboard:
   repository_path: ./runtime/signals.db
   refresh_interval_ms: 1000
   signal_limit: 25
-  title: "Scalp System Control Room"
+  title: Scalp System Control Room
   headless: false
 disaster_recovery:
   enabled: true
   replication_path: ./runtime/backups
   include_patterns:
-    - "*.db"
-    - "*.json"
-    - "*.jsonl"
+  - '*.db'
+  - '*.json'
+  - '*.jsonl'
   interval_minutes: 30
   max_snapshots: 12
 monitoring:
@@ -187,8 +188,8 @@ monitoring:
 security:
   encryption_key_path: ./runtime/secret.key
 notifications:
-  telegram_bot_token: ""
-  telegram_chat_id: ""
+  telegram_bot_token: ''
+  telegram_chat_id: ''
   enable_sound_alerts: false
   liquidity_spread_threshold_bps: 5.0
   cooldown_seconds: 30
@@ -225,13 +226,13 @@ training:
   quantization_int8_threshold: 0.5
 training_schedule:
   enabled: true
-  daily_time: "18:45"
+  daily_time: '18:45'
   weekdays:
-    - 0
-    - 1
-    - 2
-    - 3
-    - 4
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
   require_forward_window: true
 backtest:
   dataset_path: ./data/backtest.jsonl
