@@ -53,12 +53,12 @@ class OverviewScreen:
         self._module_table.pack(fill="both", expand=True)
 
         metrics_frame = create_section(self._frame, RU["metrics_header"], pack=False)
-        metrics_frame.grid(row=2, column=0, sticky="ew", padx=8, pady=6)
+        metrics_frame.grid(row=2, column=0, columnspan=2, sticky="ew", padx=8, pady=6)
         self._metrics = KeyValueMeter(metrics_frame)
-        self._metrics.pack(anchor="w", padx=8, pady=4)
+        self._metrics.pack(anchor="w", padx=8, pady=(8, 4))
 
-        actions = ttk.Frame(self._frame, style="Dashboard.Section.TFrame")
-        actions.grid(row=2, column=1, sticky="ew", padx=8, pady=6)
+        actions = ttk.Frame(metrics_frame, style="Dashboard.Section.TFrame")
+        actions.pack(fill="x", padx=8, pady=(0, 8))
         self._buttons: list[tuple[object, bool]] = []
         action_specs = [
             ("btn_restart", "system.restart", True),
@@ -68,17 +68,14 @@ class OverviewScreen:
             ("btn_refresh", None, False),
             ("btn_exit", "system.shutdown", True),
         ]
-        columns = 3
         for idx, (text_key, command, requires_bus) in enumerate(action_specs):
-            row, column = divmod(idx, columns)
             btn = ttk.Button(
                 actions,
                 text=RU[text_key],
                 command=(lambda cmd=command: self._context.emit(cmd)),
             )
-            btn.grid(row=row, column=column, padx=4, pady=4, sticky="ew")
-            actions.columnconfigure(column, weight=1)
-            actions.rowconfigure(row, weight=1)
+            btn.grid(row=0, column=idx, padx=4, pady=4, sticky="ew")
+            actions.columnconfigure(idx, weight=1)
             self._buttons.append((btn, requires_bus))
 
         signals_frame = create_section(self._frame, RU["signals_header"], pack=False)

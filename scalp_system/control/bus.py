@@ -134,8 +134,11 @@ class EventBus:
             return
         server.shutdown()
         server.server_close()
+        thread = self._thread
         self._server = None
         self._thread = None
+        if thread is not None:
+            thread.join(timeout=1.0)
         LOGGER.info("Event bus stopped")
 
 

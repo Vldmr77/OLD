@@ -92,6 +92,7 @@ class DashboardApp:
         self._status_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._subtitle_var: tk.StringVar | None = None  # type: ignore[attr-defined]
+        self._close_requested = False
 
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
@@ -101,6 +102,7 @@ class DashboardApp:
         self._root.title(self._title)
         self._root.geometry("1280x860")
         self._root.minsize(1120, 720)
+        self._root.protocol("WM_DELETE_WINDOW", self._handle_close)
 
         banner = ttk.Frame(self._root, style="DashboardBanner.TFrame")
         banner.pack(fill="x", padx=16, pady=(16, 8))
@@ -191,6 +193,29 @@ class DashboardApp:
             self._stop_event.set()
             if self._status_thread:
                 self._status_thread.join(timeout=2.0)
+
+    # ------------------------------------------------------------------
+    def _handle_close(self) -> None:
+        if self._headless or self._root is None:
+            return
+        if self._close_requested:
+            try:
+                self._root.destroy()
+            except Exception:  # pragma: no cover - defensive
+                pass
+            return
+        self._close_requested = True
+        self._stop_event.set()
+        try:
+            self._bus_client.emit("system.shutdown")
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.debug("Failed to request shutdown during close: %s", exc)
+        destroy = getattr(self._root, "destroy", None)
+        after = getattr(self._root, "after", None)
+        if callable(after):
+            after(100, lambda: destroy() if callable(destroy) else None)
+        elif callable(destroy):
+            destroy()
 
     # ------------------------------------------------------------------
     def _refresh(self) -> None:

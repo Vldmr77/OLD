@@ -362,3 +362,46 @@ def test_dashboard_bus_client_marks_bus_down_after_emit_failure(monkeypatch):
         client.emit("system.restart")
 
     assert client.is_up() is False
+
+
+def test_dashboard_close_requests_shutdown(monkeypatch):
+    events: list[str] = []
+
+    class DummyBus:
+        def __init__(self, *_, **__):
+            pass
+
+        def emit(self, name: str, args: dict | None = None) -> None:
+            events.append(name)
+
+    app = DashboardApp(headless=True, status_provider=lambda: {})
+    app._headless = False  # type: ignore[attr-defined]
+    app._bus_client = DummyBus()  # type: ignore[assignment]
+
+    class DummyRoot:
+        def __init__(self) -> None:
+            self.destroyed = False
+            self.after_calls = 0
+
+        def after(self, delay: int, callback):
+            self.after_calls += 1
+            callback()
+
+        def destroy(self):
+            self.destroyed = True
+
+    dummy_root = DummyRoot()
+    app._root = dummy_root  # type: ignore[assignment]
+
+    app._handle_close()
+
+    assert events == ["system.shutdown"]
+    assert dummy_root.destroyed is True
+    assert app._stop_event.is_set()
+
+    events.clear()
+    dummy_root.destroyed = False
+    app._handle_close()
+
+    assert events == []
+    assert dummy_root.destroyed is True
