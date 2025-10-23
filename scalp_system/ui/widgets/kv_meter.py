@@ -1,6 +1,8 @@
 """Key-value metric badges for the dashboard."""
 from __future__ import annotations
 
+from ..i18n import RU
+
 try:  # pragma: no cover - tkinter optional
     import tkinter as tk  # type: ignore
     from tkinter import ttk  # type: ignore
@@ -25,7 +27,9 @@ class KeyValueMeter(ttk.Frame):  # type: ignore[misc]
             row, column = 0, index
             card = ttk.Frame(self, style="DashboardBadge.TFrame")
             card.grid(row=row, column=column, padx=6, pady=6, sticky="nsew")
-            title = ttk.Label(card, text=str(name).upper(), style="DashboardBadge.Title.TLabel")
+            key = str(name)
+            display_name = RU.get(f"metric_{key}", key.replace("_", " ").upper())
+            title = ttk.Label(card, text=display_name, style="DashboardBadge.Title.TLabel")
             title.pack(anchor="w")
             value_label = ttk.Label(card, text=str(value), style="DashboardBadge.Value.TLabel")
             value_label.pack(anchor="w", pady=(2, 0))

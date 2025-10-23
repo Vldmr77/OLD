@@ -6,7 +6,7 @@ import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import AsyncIterator, Optional
+from typing import Any, AsyncIterator, Optional
 
 from ..data.models import Candle, OrderBook, OrderBookLevel, Trade
 
@@ -32,17 +32,34 @@ def ensure_sdk_available() -> None:
 
 
 @asynccontextmanager
-async def open_async_client(token: str, *, use_sandbox: bool) -> AsyncIterator["AsyncClient"]:
-    """Context manager that yields an authenticated ``AsyncClient`` instance."""
+async def open_async_client(token: str, *, use_sandbox: bool) -> AsyncIterator[Any]:
+    """Yield an authenticated asynchronous client from the SDK.
+
+    The upstream ``tinkoff-investments`` package exposes ``AsyncClient`` purely as a
+    context manager that returns ``AsyncServices`` from ``__aenter__`` and does not
+    implement a ``close`` coroutine. Our original implementation attempted to manage
+    the lifecycle manually and called ``await client.close()``, which raises an
+    ``AttributeError`` on shutdown. To mirror the semantics of ``async with
+    AsyncClient(...)`` we simply delegate to the SDK's context manager and yield the
+    opened services instance.
+    """
 
     ensure_sdk_available()
     assert AsyncClient is not None  # for type-checkers
     target: Optional[str] = "sandbox" if use_sandbox else None
     client = AsyncClient(token, target=target)
-    try:
-        yield client
-    finally:
-        await client.close()
+    if hasattr(client, "__aenter__") and hasattr(client, "__aexit__"):
+        async with client as services:
+            yield services
+    else:  # pragma: no cover - fallback for mocked clients without context manager
+        try:
+            yield client
+        finally:
+            close = getattr(client, "close", None)
+            if close is not None:
+                result = close()
+                if asyncio.iscoroutine(result):
+                    await result
 
 
 class AsyncRateLimiter:
@@ -75,7 +92,7 @@ class TinkoffAPI:
         self._limiter = AsyncRateLimiter(self.rate_limit_per_minute)
 
     @asynccontextmanager
-    async def client(self) -> AsyncIterator["AsyncClient"]:
+    async def client(self) -> AsyncIterator[Any]:
         """Yield a configured ``AsyncClient`` instance."""
 
         async with open_async_client(self.token, use_sandbox=self.use_sandbox) as client:

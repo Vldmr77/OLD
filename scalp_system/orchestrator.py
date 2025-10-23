@@ -6,7 +6,7 @@ import logging
 import os
 import subprocess
 import sys
-from collections import deque
+from collections import OrderedDict, deque
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
@@ -135,6 +135,7 @@ class Orchestrator:
         self._restart_event: Optional[asyncio.Event] = None
         self._restart_callback_logged = False
         self._pending_restart = False
+        self._shutdown_requested = False
         self._latency_events: Deque[LatencyAlert] = deque()
         self._checkpoint_manager = CheckpointManager(
             config.storage.base_path / "checkpoint.json"
@@ -611,15 +612,30 @@ class Orchestrator:
         if fallback_last:
             alerts.append({"id": "fallback.rejection", "severity": "warning", "since": now_iso})
 
-        metrics = {
-            "cpu": round(resource_snapshot.cpu_percent, 2),
-            "ram": round(resource_snapshot.memory_percent, 2),
-            "gpu": round(resource_snapshot.gpu_memory_percent or 0.0, 2)
-            if resource_snapshot.gpu_memory_percent is not None
-            else 0.0,
-            "liquidity": round(self._metrics.liquidity_score, 3),
-        }
-        metrics.update({f"latency_{stage}": round(value, 2) for stage, value in self._metrics.latency_ms.items()})
+        metrics = OrderedDict()
+        metrics["cpu"] = f"{resource_snapshot.cpu_percent:.1f}%"
+        cpu_temp = resource_snapshot.cpu_temp_c
+        metrics["cpu_temp"] = f"{cpu_temp:.1f}°C" if cpu_temp is not None else "n/a"
+        metrics["ram"] = f"{resource_snapshot.memory_percent:.1f}%"
+        if resource_snapshot.gpu_memory_percent is not None:
+            metrics["gpu"] = f"{resource_snapshot.gpu_memory_percent:.1f}%"
+        else:
+            metrics["gpu"] = "n/a"
+        gpu_temp = resource_snapshot.gpu_temp_c
+        metrics["gpu_temp"] = f"{gpu_temp:.1f}°C" if gpu_temp is not None else "n/a"
+        network_speed = resource_snapshot.network_mbps
+        metrics["network"] = (
+            f"{network_speed:.2f} Mbps" if network_speed is not None else "n/a"
+        )
+        metrics["liquidity"] = f"{self._metrics.liquidity_score:.3f}"
+        broker_latency = self._metrics.latency_ms.get("broker")
+        metrics["broker_latency"] = (
+            f"{broker_latency:.1f} ms" if broker_latency is not None else "n/a"
+        )
+        for stage, value in self._metrics.latency_ms.items():
+            if stage == "broker":
+                continue
+            metrics[f"latency_{stage}"] = f"{value:.1f} ms"
 
         ml_overview = self._ml_engine.ensemble_overview()
         ml_models = [
@@ -957,6 +973,10 @@ class Orchestrator:
 
         return self._invoke_threadsafe(_apply)
 
+    def shutdown(self) -> tuple[bool, str]:
+        self.request_shutdown()
+        return True, "Shutdown requested; stopping orchestrator."
+
     def reset_risk_limits(self) -> tuple[bool, str]:
         def _apply() -> tuple[bool, str]:
             self._risk_engine.reset_halts()
@@ -1076,6 +1096,24 @@ class Orchestrator:
             LOGGER.warning("Dashboard requested orchestrator restart")
             self._restart_callback_logged = True
         self._pending_restart = True
+        event = self._restart_event
+        loop = self._loop
+        if event is None:
+            return
+        if loop is None:
+            event.set()
+        else:
+            loop.call_soon_threadsafe(event.set)
+
+    def request_shutdown(self) -> None:
+        """Signal that the orchestrator should shut down gracefully."""
+
+        if self._shutdown_requested:
+            return
+        LOGGER.info("Dashboard requested orchestrator shutdown")
+        self._audit_logger.log("CONTROL", "SHUTDOWN", "requested=true")
+        self._shutdown_requested = True
+        self._pending_restart = False
         event = self._restart_event
         loop = self._loop
         if event is None:
@@ -1665,6 +1703,9 @@ class Orchestrator:
                     report = await self._execution_engine.execute_plan(
                         signal, plan, mid_price
                     )
+                    latency = self._execution_engine.last_broker_latency_ms
+                    if latency is not None:
+                        self._handle_latency("broker", latency)
                     if report.accepted:
                         LOGGER.info("Order executed for %s", signal.figi)
                         self._audit_logger.log(
@@ -1744,7 +1785,8 @@ class Orchestrator:
             self._stop_dashboard()
             self._stop_event_bus()
         if self._restart_event and self._restart_event.is_set():
-            raise RestartRequested()
+            if not self._shutdown_requested:
+                raise RestartRequested()
 
     def reload_models(self, model_dir: Path) -> None:
         """Reload quantised models and clear cached feature state."""
@@ -1781,6 +1823,10 @@ class Orchestrator:
         bus.register(
             "system.resume",
             lambda payload: self._handle_bus_result("resume", self.resume_trading()),
+        )
+        bus.register(
+            "system.shutdown",
+            lambda payload: self._handle_bus_result("shutdown", self.shutdown()),
         )
         bus.register(
             "system.backtest",
