@@ -307,7 +307,7 @@ class Orchestrator:
 
     def _broker_factory(self) -> Callable[[], BrokerClient]:
         if not self._api_token:
-            if self._config.system.mode == "production":
+            if self._config.system.mode == "production" and not self._config.datafeed.allow_tokenless:
                 raise RuntimeError("Broker token is required in production mode")
 
             LOGGER.warning(
@@ -846,7 +846,8 @@ class Orchestrator:
             if not success:
                 LOGGER.warning("Failed to refresh tokens before switching to production: %s", message)
             token = self._config.datafeed.production_token
-            if is_placeholder_token(token) or not token:
+            token_missing = is_placeholder_token(token) or not token
+            if token_missing and not self._config.datafeed.allow_tokenless:
                 return False, "Production token is not configured."
             if self._config_path:
                 try:
@@ -860,10 +861,13 @@ class Orchestrator:
                     return False, f"Failed to update configuration: {exc}"
             self._config.system.mode = "production"
             self._config.datafeed.use_sandbox = False
-            self._audit_logger.log(
-                "CONTROL", "PRODUCTION_MODE", "mode=production;use_sandbox=false"
-            )
+            detail = "mode=production;use_sandbox=false"
+            if token_missing:
+                detail += ";token=missing"
+            self._audit_logger.log("CONTROL", "PRODUCTION_MODE", detail)
             self.request_restart()
+            if token_missing:
+                return True, "Production mode scheduled without live token; trading will remain in paper mode."
             return True, "Production mode scheduled; restarting."
 
         return self._invoke_threadsafe(_apply)
@@ -2138,11 +2142,7 @@ def run_from_yaml(path: str | Path) -> None:
         )
         token_missing = is_placeholder_token(token)
         allow_tokenless = bool(getattr(config.datafeed, "allow_tokenless", False))
-        requires_sdk = (
-            config.system.mode == "production"
-            or not allow_tokenless
-            or not token_missing
-        )
+        requires_sdk = (not allow_tokenless) or (not token_missing)
 
         if requires_sdk:
             try:

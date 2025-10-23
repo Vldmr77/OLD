@@ -102,14 +102,19 @@ class EventBus:
                 if exc.errno not in {errno.EADDRINUSE, errno.EACCES}:
                     raise
                 if self._port_in_use():
-                    LOGGER.error(
-                        "Event bus port %s is already in use by another process.", self._port
+                    LOGGER.warning(
+                        "Event bus port %s already in use; waiting %.2fs before retry", 
+                        self._port,
+                        delay,
                     )
-                    raise
+                else:
+                    LOGGER.warning(
+                        "Event bus port %s unavailable (%s); retrying in %.2fs",
+                        self._port,
+                        exc,
+                        delay,
+                    )
                 attempts += 1
-                LOGGER.warning(
-                    "Event bus port %s unavailable (%s); retrying in %.2fs", self._port, exc, delay
-                )
                 time.sleep(delay)
                 delay = min(delay * 1.5, 0.5)
 

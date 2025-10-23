@@ -123,6 +123,7 @@ def test_event_bus_registers_dashboard_commands(tmp_path):
 
 def test_start_production_mode_requires_token(tmp_path):
     config = _build_config(tmp_path)
+    config.datafeed.allow_tokenless = False  # force token requirement
     orchestrator = Orchestrator(config)
 
     ok, message = orchestrator.start_production_mode()
@@ -138,3 +139,13 @@ def test_start_production_mode_requires_token(tmp_path):
     assert "Production mode" in message
     assert orchestrator._config.system.mode == "production"  # type: ignore[attr-defined]
     assert orchestrator._config.datafeed.use_sandbox is False  # type: ignore[attr-defined]
+
+
+def test_start_production_mode_tokenless_allowed(tmp_path):
+    config = _build_config(tmp_path)
+    config.datafeed.allow_tokenless = True
+    orchestrator = Orchestrator(config)
+
+    ok, message = orchestrator.start_production_mode()
+    assert ok is True
+    assert "paper mode" in message.lower()
