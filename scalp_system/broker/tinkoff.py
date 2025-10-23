@@ -2,13 +2,23 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, AsyncIterator, Optional
+from typing import Any, AsyncIterator, Iterator, Optional
 
 from ..data.models import Candle, OrderBook, OrderBookLevel, Trade
+
+try:  # pragma: no cover - fallback for optional SDK constants
+    from tinkoff.invest.constants import (
+        INVEST_GRPC_API,
+        INVEST_GRPC_API_SANDBOX,
+    )
+except ImportError:  # pragma: no cover
+    INVEST_GRPC_API = "invest-public-api.tinkoff.ru"
+    INVEST_GRPC_API_SANDBOX = "sandbox-invest-public-api.tinkoff.ru"
 
 try:  # pragma: no cover - runtime import
     from tinkoff.invest import AsyncClient, CandleInterval
@@ -31,6 +41,53 @@ def ensure_sdk_available() -> None:
         )
 
 
+@contextmanager
+def _grpc_environment() -> Iterator[None]:
+    """Temporarily adjust environment variables for gRPC connections."""
+
+    saved: dict[str, Optional[str]] = {}
+
+    def _set_env(key: str, value: Optional[str]) -> None:
+        saved.setdefault(key, os.environ.get(key))
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+    cert_path = (
+        os.environ.get("REQUESTS_CA_BUNDLE")
+        or os.environ.get("SSL_CERT_FILE")
+        or os.environ.get("PIP_CERT")
+        or os.environ.get("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH")
+    )
+    if cert_path and os.path.exists(cert_path):
+        _set_env("GRPC_DEFAULT_SSL_ROOTS_FILE_PATH", cert_path)
+
+    existing_no_proxy = os.environ.get("grpc.no_proxy", "")
+    no_proxy_hosts = "invest-public-api.tinkoff.ru,invest-public-api.tinkoff.ru:443"
+    if no_proxy_hosts not in existing_no_proxy:
+        combined = f"{existing_no_proxy},{no_proxy_hosts}" if existing_no_proxy else no_proxy_hosts
+        _set_env("grpc.no_proxy", combined)
+
+    for std_key, grpc_key in (
+        ("http_proxy", "grpc.http_proxy"),
+        ("https_proxy", "grpc.https_proxy"),
+        ("HTTP_PROXY", "grpc.HTTP_PROXY"),
+        ("HTTPS_PROXY", "grpc.HTTPS_PROXY"),
+    ):
+        if std_key in os.environ:
+            _set_env(grpc_key, os.environ[std_key])
+
+    try:
+        yield None
+    finally:
+        for key, original in saved.items():
+            if original is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = original
+
+
 @asynccontextmanager
 async def open_async_client(token: str, *, use_sandbox: bool) -> AsyncIterator[Any]:
     """Yield an authenticated asynchronous client from the SDK.
@@ -46,8 +103,10 @@ async def open_async_client(token: str, *, use_sandbox: bool) -> AsyncIterator[A
 
     ensure_sdk_available()
     assert AsyncClient is not None  # for type-checkers
-    target: Optional[str] = "sandbox" if use_sandbox else None
-    client = AsyncClient(token, target=target)
+    target_host = INVEST_GRPC_API_SANDBOX if use_sandbox else INVEST_GRPC_API
+    target = f"{target_host}:443"
+    with _grpc_environment():
+        client = AsyncClient(token, target=target)
     if hasattr(client, "__aenter__") and hasattr(client, "__aexit__"):
         async with client as services:
             yield services

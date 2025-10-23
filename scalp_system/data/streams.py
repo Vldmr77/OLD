@@ -17,12 +17,11 @@ from ..broker.tinkoff import ensure_sdk_available, open_async_client
 LOGGER = logging.getLogger(__name__)
 
 try:  # pragma: no cover - optional dependency
-    from tinkoff.invest import OrderBookInstrument, SubscribeOrderBookRequest
-    from tinkoff.invest.async_services import AsyncMarketDataStreamService
+    from tinkoff.invest import OrderBookInstrument
+    from tinkoff.invest.async_services import AsyncMarketDataStreamManager
 except ImportError:  # pragma: no cover
     OrderBookInstrument = None  # type: ignore
-    SubscribeOrderBookRequest = None  # type: ignore
-    AsyncMarketDataStreamService = None  # type: ignore
+    AsyncMarketDataStreamManager = None  # type: ignore
 
 
 class MarketDataStream:
@@ -45,7 +44,7 @@ class MarketDataStream:
         self._reconnect_backoff = reconnect_backoff
         self._client_cm = None
         self._client = None
-        self._stream: Optional[AsyncMarketDataStreamService] = None
+        self._stream: Optional[AsyncMarketDataStreamManager] = None
 
     async def __aenter__(self) -> "MarketDataStream":
         self._client_cm = open_async_client(self._token, use_sandbox=self._use_sandbox)
@@ -56,31 +55,22 @@ class MarketDataStream:
 
     async def __aexit__(self, exc_type, exc, tb) -> None:
         if self._stream:
-            await self._stream.close()
+            self._stream.stop()
         if self._client_cm is not None:
             await self._client_cm.__aexit__(exc_type, exc, tb)
         self._client = None
         self._client_cm = None
 
     async def _subscribe_order_book(self) -> None:
-        assert self._stream is not None and OrderBookInstrument is not None and SubscribeOrderBookRequest is not None
+        assert self._stream is not None and OrderBookInstrument is not None
         order_book_instruments = [
             OrderBookInstrument(figi=figi, depth=self._depth) for figi in self._instruments
         ]
-        request = SubscribeOrderBookRequest(
-            subscription_action=SubscribeOrderBookRequest.SubscriptionAction.SUBSCRIPTION_ACTION_SUBSCRIBE,
-            instruments=order_book_instruments,
-        )
-        await self._stream.order_book_subscribe(request)
+        self._stream.order_book.subscribe(order_book_instruments)
 
     async def order_books(self) -> AsyncIterator[OrderBook]:
         assert self._stream is not None
-        while True:
-            try:
-                response = await self._stream.__anext__()
-            except StopAsyncIteration:
-                LOGGER.info("Market data stream finished")
-                return
+        async for response in self._stream:
             if response.order_book:
                 ob = response.order_book
                 yield OrderBook(
