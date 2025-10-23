@@ -104,6 +104,8 @@ def test_event_bus_registers_dashboard_commands(tmp_path):
             "system.sandbox_forward",
             "system.forwardtest",
             "system.forwardtest.start",
+            "system.production",
+            "system.production.start",
             "risk.reset_stops",
             "exec.cancel_all",
             "features.resync",
@@ -117,3 +119,22 @@ def test_event_bus_registers_dashboard_commands(tmp_path):
         assert expected.issubset(set(handlers.keys()))
     finally:
         orchestrator._stop_event_bus()
+
+
+def test_start_production_mode_requires_token(tmp_path):
+    config = _build_config(tmp_path)
+    orchestrator = Orchestrator(config)
+
+    ok, message = orchestrator.start_production_mode()
+    assert ok is False
+    assert "Production token" in message
+
+    orchestrator._config.datafeed.production_token = "prod-real-token-123"  # type: ignore[attr-defined]
+    orchestrator._config.system.mode = "forward-test"  # type: ignore[attr-defined]
+    orchestrator._config.datafeed.use_sandbox = True  # type: ignore[attr-defined]
+
+    ok, message = orchestrator.start_production_mode()
+    assert ok is True
+    assert "Production mode" in message
+    assert orchestrator._config.system.mode == "production"  # type: ignore[attr-defined]
+    assert orchestrator._config.datafeed.use_sandbox is False  # type: ignore[attr-defined]

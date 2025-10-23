@@ -838,6 +838,36 @@ class Orchestrator:
 
         return self._invoke_threadsafe(_apply)
 
+    def start_production_mode(self) -> tuple[bool, str]:
+        def _apply() -> tuple[bool, str]:
+            success, message = self._refresh_tokens_from_disk(
+                request_restart_on_change=False
+            )
+            if not success:
+                LOGGER.warning("Failed to refresh tokens before switching to production: %s", message)
+            token = self._config.datafeed.production_token
+            if is_placeholder_token(token) or not token:
+                return False, "Production token is not configured."
+            if self._config_path:
+                try:
+                    set_operational_mode(
+                        self._config_path,
+                        mode="production",
+                        use_sandbox=False,
+                    )
+                except Exception as exc:  # pragma: no cover - file system guard
+                    LOGGER.exception("Failed to update configuration for production mode: %s", exc)
+                    return False, f"Failed to update configuration: {exc}"
+            self._config.system.mode = "production"
+            self._config.datafeed.use_sandbox = False
+            self._audit_logger.log(
+                "CONTROL", "PRODUCTION_MODE", "mode=production;use_sandbox=false"
+            )
+            self.request_restart()
+            return True, "Production mode scheduled; restarting."
+
+        return self._invoke_threadsafe(_apply)
+
     def trigger_backtest(self) -> tuple[bool, str]:
         loop = self._loop
 
@@ -1871,6 +1901,18 @@ class Orchestrator:
             ),
         )
         bus.register(
+            "system.production",
+            lambda payload: self._handle_bus_result(
+                "production", self.start_production_mode()
+            ),
+        )
+        bus.register(
+            "system.production.start",
+            lambda payload: self._handle_bus_result(
+                "production", self.start_production_mode()
+            ),
+        )
+        bus.register(
             "risk.reset_stops",
             lambda payload: self._handle_bus_result("risk_reset", self.reset_risk_limits()),
         )
@@ -2055,6 +2097,7 @@ class Orchestrator:
                 sandbox_forward_callback=self.start_sandbox_forward,
                 backtest_callback=self.trigger_backtest,
                 training_callback=self.trigger_training,
+                production_callback=self.start_production_mode,
                 bus_address=bus_address,
             )
         except OSError as exc:

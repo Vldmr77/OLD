@@ -64,18 +64,22 @@ class OverviewScreen:
             ("btn_restart", "system.restart", True),
             ("btn_pause", "system.pause", True),
             ("btn_resume", "system.resume", True),
+            ("btn_backtest", "system.backtest", True),
+            ("btn_forward", "system.forwardtest", True),
+            ("btn_production", "system.production", True),
             ("btn_reset_risk", "risk.reset_stops", True),
             ("btn_refresh", None, False),
             ("btn_exit", "system.shutdown", True),
         ]
         for idx, (text_key, command, requires_bus) in enumerate(action_specs):
+            row, col = divmod(idx, 6)
             btn = ttk.Button(
                 actions,
                 text=RU[text_key],
                 command=(lambda cmd=command: self._context.emit(cmd)),
             )
-            btn.grid(row=0, column=idx, padx=4, pady=4, sticky="ew")
-            actions.columnconfigure(idx, weight=1)
+            btn.grid(row=row, column=col, padx=4, pady=4, sticky="ew")
+            actions.columnconfigure(col, weight=1)
             self._buttons.append((btn, requires_bus))
 
         signals_frame = create_section(self._frame, RU["signals_header"], pack=False)

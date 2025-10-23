@@ -41,6 +41,7 @@ class ScreenContext:
     sandbox_forward: Callable[[], tuple[bool, str]]
     backtest: Callable[[], tuple[bool, str]]
     training: Callable[[], tuple[bool, str]]
+    production: Callable[[], tuple[bool, str]]
 
 
 class DashboardApp:
@@ -49,6 +50,7 @@ class DashboardApp:
     _COMMAND_ALIASES: Dict[str, str] = {
         "system.backtest.create": "system.backtest",
         "system.forwardtest.start": "system.forwardtest",
+        "system.production.start": "system.production",
     }
 
     def __init__(
@@ -68,6 +70,7 @@ class DashboardApp:
         sandbox_forward_callback: Callable[[], tuple[bool, str]] | None = None,
         backtest_callback: Callable[[], tuple[bool, str]] | None = None,
         training_callback: Callable[[], tuple[bool, str]] | None = None,
+        production_callback: Callable[[], tuple[bool, str]] | None = None,
         events_endpoint: str | None = None,
     ) -> None:
         self._state = State()
@@ -84,6 +87,7 @@ class DashboardApp:
         self._sandbox_forward_callback = sandbox_forward_callback or (lambda: (False, ""))
         self._backtest_callback = backtest_callback or (lambda: (False, ""))
         self._training_callback = training_callback or (lambda: (False, ""))
+        self._production_callback = production_callback or (lambda: (False, ""))
         self._root: tk.Tk | None = None  # type: ignore[assignment]
         self._notebook: ttk.Notebook | None = None  # type: ignore[assignment]
         self._screens: list[object] = []
@@ -146,6 +150,7 @@ class DashboardApp:
             sandbox_forward=self._sandbox_forward,
             backtest=self._backtest,
             training=self._training,
+            production=self._production,
         )
 
         self._screens = [
@@ -302,6 +307,7 @@ class DashboardApp:
             "system.restart": self._restart_callback,
             "system.backtest": self._backtest_callback,
             "system.forwardtest": self._sandbox_forward_callback,
+            "system.production": self._production_callback,
             "ml.train": self._training_callback,
         }
         callback = fallback_map.get(canonical)
@@ -341,6 +347,14 @@ class DashboardApp:
             return self._sandbox_forward_callback()
         except Exception as exc:  # pragma: no cover - defensive
             LOGGER.exception("Sandbox forward failed: %s", exc)
+            return False, str(exc)
+
+    # ------------------------------------------------------------------
+    def _production(self) -> tuple[bool, str]:
+        try:
+            return self._production_callback()
+        except Exception as exc:  # pragma: no cover - defensive
+            LOGGER.exception("Production switch failed: %s", exc)
             return False, str(exc)
 
     # ------------------------------------------------------------------
@@ -434,6 +448,7 @@ def run_dashboard(
     sandbox_forward_callback: Callable[[], tuple[bool, str]] | None = None,
     backtest_callback: Callable[[], tuple[bool, str]] | None = None,
     training_callback: Callable[[], tuple[bool, str]] | None = None,
+    production_callback: Callable[[], tuple[bool, str]] | None = None,
     bus_address: tuple[str, int] | None = None,
     events_endpoint: str | None = None,
     status_endpoint: str | None = None,
@@ -457,6 +472,7 @@ def run_dashboard(
         sandbox_forward_callback=sandbox_forward_callback,
         backtest_callback=backtest_callback,
         training_callback=training_callback,
+        production_callback=production_callback,
         events_endpoint=events_endpoint,
     )
 
