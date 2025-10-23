@@ -1,8 +1,10 @@
+import logging
 import socket
 from datetime import datetime, timezone
 
 from scalp_system.config.base import OrchestratorConfig
 from scalp_system.data.models import OrderBook, OrderBookLevel
+
 from scalp_system.orchestrator import Orchestrator
 
 
@@ -149,3 +151,17 @@ def test_start_production_mode_tokenless_allowed(tmp_path):
     ok, message = orchestrator.start_production_mode()
     assert ok is True
     assert "paper mode" in message.lower()
+
+
+def test_dashboard_status_exposes_adapter_logs(tmp_path):
+    config = _build_config(tmp_path)
+    orchestrator = Orchestrator(config)
+
+    adapter_logger = logging.getLogger("scalp_system.broker.tinkoff")
+    adapter_logger.setLevel(logging.INFO)
+    adapter_logger.info("adapter connected")
+
+    payload = orchestrator.dashboard_status()
+    adapter_section = payload.get("adapter", {})
+    assert "logs" in adapter_section
+    assert any("adapter connected" in line for line in adapter_section.get("logs", []))

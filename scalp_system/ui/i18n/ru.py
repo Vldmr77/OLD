@@ -84,6 +84,7 @@ RU: dict[str, str] = {
     "adapter_quota": "Квоты и лимиты",
     "adapter_errors": "Ошибки",
     "adapter_diag": "Диагностика",
+    "adapter_logs": "Логи адаптера",
     "bus_topics": "Топики",
     "bus_metrics": "RPS и лаг",
     "bus_events": "Последние события",

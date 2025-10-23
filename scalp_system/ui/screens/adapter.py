@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ..i18n import RU
 from ..widgets.kv_meter import KeyValueMeter
+from ..widgets.log_tail import LogTail
 from .screen_utils import create_section
 
 try:  # pragma: no cover
@@ -52,6 +53,11 @@ class AdapterScreen:
         self._diag = KeyValueMeter(diag_frame)
         self._diag.pack(anchor="w", padx=8, pady=4)
 
+        logs_frame = create_section(frame, RU["adapter_logs"])
+        self._log_tail = LogTail(logs_frame)
+        self._log_tail.pack(fill="both", expand=True)
+        self._last_log_count = 0
+
         buttons = ttk.Frame(frame, style="Dashboard.Section.TFrame")
         buttons.pack(fill="x", padx=8, pady=4)
         self._bus_buttons = [
@@ -84,6 +90,13 @@ class AdapterScreen:
         self._quota.update_metrics(payload.get("quota", {}))
         self._errors.update_metrics(payload.get("errors", {}))
         self._diag.update_metrics(payload.get("diagnostics", {}))
+        lines = payload.get("logs", []) if isinstance(payload, dict) else []
+        if isinstance(lines, list):
+            if len(lines) < getattr(self, "_last_log_count", 0):
+                self._log_tail.set_lines(lines)
+            else:
+                self._log_tail.extend(lines[getattr(self, "_last_log_count", 0) :])
+            self._last_log_count = len(lines)
         for button in getattr(self, "_bus_buttons", []):
             button.configure(state="normal" if self._context.bus.is_up() else "disabled")
 

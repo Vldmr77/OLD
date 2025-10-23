@@ -6,6 +6,7 @@ import logging
 import os
 import subprocess
 import sys
+import weakref
 from collections import OrderedDict, deque
 from concurrent.futures import Future, TimeoutError as FutureTimeout
 from contextlib import suppress
@@ -58,6 +59,25 @@ from .simulation.backtest import BacktestEngine
 from .ui import run_dashboard
 
 LOGGER = logging.getLogger(__name__)
+
+
+class _AdapterLogHandler(logging.Handler):
+    """Capture adapter-facing log messages for the dashboard."""
+
+    def __init__(self, buffer: Deque[str]) -> None:
+        super().__init__(level=logging.INFO)
+        self._buffer = buffer
+        self._lock = Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - exercised via logging
+        try:
+            message = self.format(record)
+        except Exception:  # pragma: no cover - fallback
+            message = record.getMessage()
+        timestamp = datetime.utcnow().strftime("%H:%M:%S")
+        line = f"{timestamp} [{record.levelname}] {message}"
+        with self._lock:
+            self._buffer.append(line)
 
 
 class RestartRequested(RuntimeError):
@@ -138,6 +158,21 @@ class Orchestrator:
         self._pending_restart = False
         self._shutdown_requested = False
         self._latency_events: Deque[LatencyAlert] = deque()
+        self._adapter_logs: Deque[str] = deque(maxlen=200)
+        self._adapter_log_handler: _AdapterLogHandler | None = _AdapterLogHandler(self._adapter_logs)
+        self._adapter_loggers: list[logging.Logger] = []
+        if self._adapter_log_handler:
+            for logger_name in (
+                "scalp_system.broker",
+                "scalp_system.broker.tinkoff",
+                "scalp_system.data.streams",
+                "scalp_system.execution.client",
+                "scalp_system.execution.executor",
+            ):
+                logger = logging.getLogger(logger_name)
+                logger.addHandler(self._adapter_log_handler)
+                self._adapter_loggers.append(logger)
+        self._adapter_log_finalizer = weakref.finalize(self, self._detach_adapter_logging)
         self._checkpoint_manager = CheckpointManager(
             config.storage.base_path / "checkpoint.json"
         )
@@ -719,6 +754,7 @@ class Orchestrator:
                 "channel": connectivity.get("active_channel", "n/a"),
                 "token_present": bool(self._api_token),
             },
+            "logs": list(self._adapter_logs),
         }
 
         bus_info = {
@@ -1164,6 +1200,7 @@ class Orchestrator:
 
         if self._shutdown_requested:
             return
+        self._detach_adapter_logging()
         LOGGER.info("Dashboard requested orchestrator shutdown")
         self._audit_logger.log("CONTROL", "SHUTDOWN", "requested=true")
         self._shutdown_requested = True
@@ -1176,6 +1213,26 @@ class Orchestrator:
             event.set()
         else:
             loop.call_soon_threadsafe(event.set)
+
+    def _detach_adapter_logging(self) -> None:
+        handler = getattr(self, "_adapter_log_handler", None)
+        if handler is None:
+            return
+        for logger in getattr(self, "_adapter_loggers", []):
+            try:
+                logger.removeHandler(handler)
+            except ValueError:  # pragma: no cover - defensive guard
+                continue
+        handler.close()
+        self._adapter_loggers = []
+        self._adapter_log_handler = None
+        finalizer = getattr(self, "_adapter_log_finalizer", None)
+        if finalizer is not None:
+            detach = getattr(finalizer, "detach", None)
+            alive = getattr(finalizer, "alive", False)
+            if callable(detach) and alive:
+                detach()
+        self._adapter_log_finalizer = None
 
     def _restore_from_checkpoint(self) -> None:
         state = self._checkpoint_manager.load()

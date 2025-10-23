@@ -28,7 +28,7 @@ def test_dashboard_refresh_headless():
         "ml": {"models": [], "jobs": [], "metrics": {}, "artifacts": []},
         "risk": {"profile": {}, "exposure": [], "params": {}, "alerts": [], "log": []},
         "execution": {"queue": [], "mode": {"mode": "dev", "paper": True}, "fills": [], "stats": {}},
-        "adapter": {"quota": {}, "errors": {}, "diagnostics": {}},
+        "adapter": {"quota": {}, "errors": {}, "diagnostics": {}, "logs": []},
         "bus": {"state": "down", "host": "127.0.0.1", "port": 8787, "rps": 0, "lag_ms": 0, "topics": [], "events": []},
         "logs": {"tail": [], "metrics": {}},
     }

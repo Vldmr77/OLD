@@ -48,5 +48,9 @@ class LogTail(ttk.Frame):  # type: ignore[misc]
         self._text.see(tk.END)
         self._text.configure(state="disabled")
 
+    def set_lines(self, lines: Iterable[str]) -> None:
+        self._buffer.clear()
+        self.extend(lines)
+
 
 __all__ = ["LogTail"]
