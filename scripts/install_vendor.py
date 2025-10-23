@@ -13,7 +13,7 @@ DEFAULT_TARGET = Path(__file__).resolve().parents[1] / "scalp_system" / "vendor"
 DEFAULT_SDK = Path(__file__).resolve().parents[1] / "tinkoff_investments-0.2.0b117-py3-none-any.whl"
 
 # Essential dependencies required for the runtime to start.
-CORE_REQUIREMENTS: Sequence[str] = ("PyYAML>=6.0",)
+CORE_REQUIREMENTS: Sequence[str] = ("PyYAML>=6.0", "grpcio>=1.57.0")
 
 # Optional extras that provide enhanced functionality but are not mandatory for
 # a smoke run of the system.

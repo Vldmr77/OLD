@@ -28,7 +28,7 @@
 ## Запуск
 
 ```bash
-python scripts/install_vendor.py  # устанавливает минимальные зависимости в scalp_system/vendor
+python scripts/install_vendor.py  # устанавливает PyYAML и grpcio в scalp_system/vendor
 python scripts/apply_tinkoff_tokens.py --sandbox-token <TOKEN> --production-token <TOKEN>
 python -m scalp_system  # сначала ищет config.yaml в текущей папке, затем пакетный пример
 ```
@@ -75,7 +75,7 @@ python launch_scalp_system.py --dashboard -- --refresh-interval 750 --headless
 python scripts/install_vendor.py --include-optional --target ./scalp_system/vendor
 ```
 
-Скрипт установит SDK, базовые зависимости и (при указании `--include-optional`) дополнительные
+Скрипт установит PyYAML и grpcio, затем поставит SDK и (при указании `--include-optional`) дополнительные
 пакеты для шифрования токенов и мониторинга ресурсов в локальную папку `vendor`, которая автоматически
 подхватывается при импорте пакета. После установки доступны высокоуровневые обёртки
 `scalp_system.broker.TinkoffAPI`, а также `MarketDataStream` и `BrokerClient`, которые
