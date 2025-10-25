@@ -1,3 +1,4 @@
+import math
 from datetime import datetime, timedelta
 
 from scalp_system.config.base import RiskLimits
@@ -193,12 +194,13 @@ def test_risk_engine_manage_positions_trailing_and_closure():
     limits = RiskLimits(max_position=10, capital_base=10_000, max_risk_per_instrument=0.05)
     engine = RiskEngine(limits)
     engine.update_position("FIGI", 3, price=100, stop_loss=90)
-    snapshots = {"FIGI": {"price": 120.0, "spread": 0.1, "atr": 0.5}}
+    snapshots = {"FIGI": {"price": 120.0, "spread": 0.0, "atr": 0.02}}
     adjustments = engine.manage_positions(snapshots)
     assert any(adj.action == "tighten_stop" for adj in adjustments)
     updated_stop = engine.snapshot()["positions"][0]["stop_loss"]
-    assert updated_stop > 90
-    trigger_snapshots = {"FIGI": {"price": updated_stop - 0.1, "spread": 0.1, "atr": 0.5}}
+    expected_stop = 100 * (1 - (1.8 * (0.02 / 100) + 0.5 * 0.01))
+    assert math.isclose(updated_stop, expected_stop, rel_tol=1e-9)
+    trigger_snapshots = {"FIGI": {"price": updated_stop - 0.1, "spread": 0.0, "atr": 0.02}}
     closing = engine.manage_positions(trigger_snapshots)
     assert any(adj.action == "close" for adj in closing)
     assert engine.trading_halted() is True
@@ -223,3 +225,16 @@ def test_risk_engine_liquidity_forecast_and_hedge():
     adjustments = engine.hedge_portfolio({figi: data["price"] for figi, data in snapshots.items()})
     assert adjustments
     assert any(adj.action in {"hedge", "reduce"} for adj in adjustments)
+
+
+def test_risk_engine_manage_positions_short_side_formula():
+    limits = RiskLimits(max_position=10, capital_base=10_000, max_risk_per_instrument=0.05)
+    engine = RiskEngine(limits)
+    engine.update_position("FIGI", -2, price=200, stop_loss=0.0)
+    snapshots = {"FIGI": {"price": 180.0, "spread": 0.02, "atr": 0.03}}
+    adjustments = engine.manage_positions(snapshots)
+    assert any(adj.action == "tighten_stop" for adj in adjustments)
+    updated_stop = engine.snapshot()["positions"][0]["stop_loss"]
+    expected_stop = 200 * (1 + (1.8 * (0.03 / 200) + 0.5 * max(0.02 / 200, 0.01)))
+    assert math.isclose(updated_stop, expected_stop, rel_tol=1e-9)
+    assert engine.trading_halted() is False
