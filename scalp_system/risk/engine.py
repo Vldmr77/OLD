@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Literal
+from typing import Dict, List, Optional, Literal, Tuple
 
 from ..config.base import RiskLimits
 from ..ml.engine import MLSignal
@@ -240,6 +240,11 @@ class RiskEngine:
         self._halt_trading = True
         self._emergency_reason = reason
 
+    def emergency_reason(self) -> Optional[str]:
+        """Return the most recent emergency halt trigger reason, if any."""
+
+        return self._emergency_reason
+
     def reset_halts(self, *, reset_daily_limit: bool = True) -> None:
         """Clear manual halts so trading can resume when safe."""
 
@@ -280,6 +285,8 @@ class RiskEngine:
                 self._loss_cooldown_until = datetime.utcnow() + timedelta(
                     minutes=self._limits.loss_cooldown_minutes
                 )
+        else:
+            self._consecutive_losses = 0
 
     def snapshot(self) -> dict:
         positions: List[dict] = [
@@ -367,13 +374,22 @@ class RiskEngine:
             if not snapshot:
                 continue
             price = float(snapshot.get("price", position.average_price or 0.0))
-            spread = max(float(snapshot.get("spread", 0.0)), 0.0)
-            atr = max(float(snapshot.get("atr", 0.0)), 0.0)
             if price <= 0:
                 continue
-            desired_stop = price - (1.8 * atr + 0.5 * spread)
-            if position.quantity < 0:
-                desired_stop = price + (1.8 * atr + 0.5 * spread)
+            entry_price = position.average_price or price
+            entry_price = max(entry_price, 1e-6)
+            raw_spread = max(float(snapshot.get("spread", 0.0)), 0.0)
+            spread_ratio = raw_spread / entry_price
+            spread_ratio = max(spread_ratio, 0.01)
+            atr_value = max(float(snapshot.get("atr", 0.0)), 0.0)
+            atr_ratio = atr_value / entry_price
+            offset = 1.8 * atr_ratio + 0.5 * spread_ratio
+            direction = 1 if position.quantity > 0 else -1
+            if direction > 0:
+                desired_stop = entry_price * (1 - offset)
+            else:
+                desired_stop = entry_price * (1 + offset)
+            desired_stop = max(desired_stop, 0.01)
             tightened = False
             if position.quantity > 0:
                 if position.stop_loss == 0.0 or desired_stop > position.stop_loss:
@@ -528,9 +544,7 @@ class RiskEngine:
         if quantity <= 0:
             return None
 
-        strategy = "vwap" if quantity > 5 else "ioc"
-        aggressiveness = 0.8 if strategy == "vwap" else 1.0
-        slices = 2 if strategy == "vwap" and quantity > 5 else 1
+        strategy, aggressiveness, slices = self._routing_hints(quantity)
 
         projected_qty = position.quantity + signal.direction * quantity
         if abs(projected_qty) > self._limits.max_position:
@@ -557,6 +571,17 @@ class RiskEngine:
         if direction < 0:
             return self._limits.max_position + position.quantity
         return 0
+
+    def _routing_hints(self, quantity: int) -> Tuple[str, float, int]:
+        if quantity <= 0:
+            return "ioc", 1.0, 1
+        if quantity <= 5:
+            return "ioc", 1.0, 1
+        aggressiveness = 0.8
+        aggressive_qty = max(1, min(quantity, int(round(quantity * aggressiveness))))
+        passive_qty = quantity - aggressive_qty
+        slices = 1 + (1 if passive_qty > 0 else 0)
+        return "vwap", aggressiveness, slices
 
     def _daily_loss_limit_value(self) -> float:
         pct_limit = self._capital_base * self._limits.daily_loss_limit_pct
