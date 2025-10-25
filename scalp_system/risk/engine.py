@@ -367,13 +367,22 @@ class RiskEngine:
             if not snapshot:
                 continue
             price = float(snapshot.get("price", position.average_price or 0.0))
-            spread = max(float(snapshot.get("spread", 0.0)), 0.0)
-            atr = max(float(snapshot.get("atr", 0.0)), 0.0)
             if price <= 0:
                 continue
-            desired_stop = price - (1.8 * atr + 0.5 * spread)
-            if position.quantity < 0:
-                desired_stop = price + (1.8 * atr + 0.5 * spread)
+            entry_price = position.average_price or price
+            entry_price = max(entry_price, 1e-6)
+            raw_spread = max(float(snapshot.get("spread", 0.0)), 0.0)
+            spread_ratio = raw_spread / entry_price
+            spread_ratio = max(spread_ratio, 0.01)
+            atr_value = max(float(snapshot.get("atr", 0.0)), 0.0)
+            atr_ratio = atr_value / entry_price
+            offset = 1.8 * atr_ratio + 0.5 * spread_ratio
+            direction = 1 if position.quantity > 0 else -1
+            if direction > 0:
+                desired_stop = entry_price * (1 - offset)
+            else:
+                desired_stop = entry_price * (1 + offset)
+            desired_stop = max(desired_stop, 0.01)
             tightened = False
             if position.quantity > 0:
                 if position.stop_loss == 0.0 or desired_stop > position.stop_loss:

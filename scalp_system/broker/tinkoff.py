@@ -171,7 +171,10 @@ async def open_async_client(
         options.append(("grpc.enable_http_proxy", 1))
 
     with _grpc_environment(target_host, connection_options):
-        client = AsyncClient(token, target=target, options=options or None)
+        kwargs: dict[str, Any] = {"target": target}
+        if options:
+            kwargs["options"] = options
+        client = AsyncClient(token, **kwargs)
         if hasattr(client, "__aenter__") and hasattr(client, "__aexit__"):
             async with client as services:
                 yield services

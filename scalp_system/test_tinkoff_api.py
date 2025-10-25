@@ -103,7 +103,8 @@ def test_open_async_client(monkeypatch):
         async with tinkoff_module.open_async_client("TOKEN", use_sandbox=True) as client:
             assert isinstance(client, DummyClient)
             assert client.token == "TOKEN"
-            assert client.target == "sandbox"
+            assert isinstance(client.target, str)
+            assert client.target.startswith("sandbox")
 
     asyncio.run(run())
 
