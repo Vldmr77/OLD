@@ -71,6 +71,29 @@ def test_risk_engine_reset_halts_clears_state():
     assert engine.trading_halted() is False
 
 
+def test_risk_engine_prefers_ioc_for_small_orders():
+    limits = RiskLimits(
+        max_position=50,
+        max_gross_exposure=100_000,
+        capital_base=10_000,
+        max_risk_per_instrument=0.001,
+        max_exposure_pct=1.0,
+    )
+    engine = RiskEngine(limits)
+    signal = MLSignal(figi="FIGI", direction=1, confidence=0.95)
+    plan = engine.evaluate_signal(
+        signal,
+        price=100,
+        spread=0.05,
+        atr=0.0,
+        market_volatility=0.1,
+    )
+    assert plan is not None
+    assert plan.strategy == "ioc"
+    assert plan.aggressiveness == 1.0
+    assert plan.slices == 1
+
+
 def test_risk_engine_triggers_vwap_strategy():
     limits = RiskLimits(
         max_position=500,
@@ -90,6 +113,7 @@ def test_risk_engine_triggers_vwap_strategy():
     )
     assert plan is not None
     assert plan.strategy == "vwap"
+    assert plan.aggressiveness == 0.8
     assert plan.slices == 2
 
 
@@ -238,3 +262,52 @@ def test_risk_engine_manage_positions_short_side_formula():
     expected_stop = 200 * (1 + (1.8 * (0.03 / 200) + 0.5 * max(0.02 / 200, 0.01)))
     assert math.isclose(updated_stop, expected_stop, rel_tol=1e-9)
     assert engine.trading_halted() is False
+
+
+def test_risk_engine_resets_consecutive_losses_after_profit():
+    limits = RiskLimits(
+        max_position=5,
+        max_consecutive_losses=2,
+        loss_cooldown_minutes=5,
+        capital_base=10_000,
+        max_risk_per_instrument=0.01,
+    )
+    engine = RiskEngine(limits)
+    engine.update_position("FIGI", 1, price=100)
+    engine.update_position("FIGI", -1, price=95)
+    assert engine.snapshot()["consecutive_losses"] == 1
+
+    engine.update_position("FIGI", 1, price=100)
+    engine.update_position("FIGI", -1, price=110)
+    assert engine.snapshot()["consecutive_losses"] == 0
+
+    engine.update_position("FIGI", 1, price=100)
+    engine.update_position("FIGI", -1, price=96)
+    assert engine.snapshot()["consecutive_losses"] == 1
+
+
+def test_risk_engine_exposes_emergency_reason_on_stop():
+    limits = RiskLimits(max_position=10, capital_base=10_000, max_risk_per_instrument=0.05)
+    engine = RiskEngine(limits)
+    engine.update_position("FIGI", 3, price=100, stop_loss=95)
+    trigger_snapshots = {"FIGI": {"price": 94.5, "spread": 0.02, "atr": 0.01}}
+    closing = engine.manage_positions(trigger_snapshots)
+    assert any(adj.action == "close" for adj in closing)
+    assert engine.trading_halted() is True
+    assert engine.emergency_reason() == "stop_loss_trigger"
+
+
+def test_risk_engine_hedge_portfolio_enforces_reduce_on_excess_exposure():
+    limits = RiskLimits(
+        max_position=100,
+        capital_base=100_000,
+        max_risk_per_instrument=0.05,
+        max_gross_exposure=5_000,
+    )
+    engine = RiskEngine(limits)
+    engine.update_position("FIGI1", 80, price=100)
+    prices = {"FIGI1": 100.0}
+    adjustments = engine.hedge_portfolio(prices)
+    actions = {adj.action for adj in adjustments}
+    assert "hedge" in actions
+    assert any(adj.action == "reduce" and adj.reason == "gross_exposure_limit" for adj in adjustments)

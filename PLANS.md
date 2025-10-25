@@ -3,8 +3,8 @@
 ## Stage 1 — Risk control alignment with v10.4 spec
 - **Subtasks**
   1. ✅ *(2025-10-25)* Reconcile stop-loss and trailing logic with the specification formula that references entry price, ATR(5) and spread hard floor.
-  2. Ensure RiskEngine-produced order plans respect VWAP/IOC routing split (>5 lots vs 1-5 lots) and expose aggressiveness/slices for execution.
-  3. Extend unit coverage for stop management, circuit breaker triggers and hedge actions when imbalance thresholds are crossed.
+  2. ✅ *(2025-10-25)* Ensure RiskEngine-produced order plans respect VWAP/IOC routing split (>5 lots vs 1-5 lots) and expose aggressiveness/slices for execution.
+  3. ✅ *(2025-10-26)* Extend unit coverage for stop management, circuit breaker triggers and hedge actions when imbalance thresholds are crossed.
 - **Readiness criteria**
   - Stop recalculation uses entry price and enforces the `max(spread, 0.01)` guard everywhere.
   - Position adjustments emitted for stop-loss and hedging scenarios match spec thresholds (cooldown after 3 consecutive losses, LTE failover hook).
@@ -64,7 +64,7 @@
   - *Risk*: Recovery flows may be flaky due to filesystem timing. *Mitigation*: Use temp directories and deterministic mocks.
 
 ## Progress tracking
-- Current stage: **Stage 1 — Risk control alignment**
-- Completed work: Stage 1 Subtask 1 delivered on 2025-10-25 (stop-loss refactor + test runner).
-- Remaining stages: Stage 1 Subtasks 2-3, Stage 2, Stage 3
-- Next action: Implement Stage 1 Subtask 2 (VWAP/IOC routing validation and exposure signalling) with focused unit tests.
+- Current stage: **Stage 2 — Data & feature pipeline compliance**
+- Completed work: Stage 1 Subtasks 1-3 delivered by 2025-10-26 (stop-loss refactor, routing hints, expanded circuit-breaker & hedging coverage).
+- Remaining stages: Stage 2, Stage 3
+- Next action: Tackle Stage 2 Subtask 1 (align feature extraction with depth-20 order books and broaden feature coverage).
